@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rank My Draft</title>
+    <meta
+      name="description"
+      content="Paste an MTG Arena draft deck export and rank it using 17Lands color and card win-rate data."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="intro" aria-labelledby="app-title">
+        <div>
+          <p class="eyebrow">17Lands draft snapshot</p>
+          <h1 id="app-title">Rank My Draft</h1>
+        </div>
+        <p class="source-note">
+          Paste an MTG Arena deck export. Results use public 17Lands data for
+          Premier Draft over the past two weeks.
+        </p>
+      </section>
+
+      <section class="tool" aria-labelledby="export-label">
+        <label id="export-label" for="arena-export">Arena Export</label>
+        <textarea
+          id="arena-export"
+          spellcheck="false"
+          placeholder="Deck&#10;1 Card Name (SET) 123&#10;8 Plains (SET) 272"
+        ></textarea>
+        <div class="actions">
+          <button id="rank-button" type="button">Rank It</button>
+          <button id="sample-button" class="secondary" type="button">
+            Load Sample
+          </button>
+        </div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="results" class="results hidden" aria-live="polite">
+        <div class="summary-grid">
+          <article>
+            <span>Color Pair</span>
+            <strong id="color-pair">-</strong>
+          </article>
+          <article>
+            <span>Set</span>
+            <strong id="set-name">-</strong>
+          </article>
+          <article>
+            <span>Pair Win Rate</span>
+            <strong id="pair-win-rate">-</strong>
+          </article>
+          <article>
+            <span>Mean GIH WR</span>
+            <strong id="mean-gih">-</strong>
+          </article>
+        </div>
+
+        <div class="details">
+          <div>
+            <h2>Query</h2>
+            <dl class="metadata">
+              <div>
+                <dt>Date Range</dt>
+                <dd id="date-range">-</dd>
+              </div>
+              <div>
+                <dt>Cards Counted</dt>
+                <dd id="cards-counted">-</dd>
+              </div>
+              <div>
+                <dt>Fallbacks</dt>
+                <dd id="fallback-count">-</dd>
+              </div>
+            </dl>
+          </div>
+          <div>
+            <h2>Card GIH WR</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Qty</th>
+                    <th scope="col">Card</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">GIH Games</th>
+                    <th scope="col">GIH WR</th>
+                  </tr>
+                </thead>
+                <tbody id="card-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <template id="empty-row-template">
+      <tr>
+        <td colspan="5">No matching non-basic cards were found.</td>
+      </tr>
+    </template>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
