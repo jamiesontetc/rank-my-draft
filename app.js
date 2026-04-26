@@ -396,8 +396,7 @@ function getSetStartDate(filters, setCode) {
 async function findMostRecentAvailableRange(setCode, preferredRange, onProgress) {
   const filters = await fetchFilters();
   const setStartDate = getSetStartDate(filters, setCode);
-  let chunkRange = preferredRange;
-  let queryRange = preferredRange;
+  let searchRange = preferredRange;
   let checkedWindows = 0;
   let fallbackUsed = false;
 
@@ -405,25 +404,39 @@ async function findMostRecentAvailableRange(setCode, preferredRange, onProgress)
     checkedWindows += 1;
     const colorRatings = await fetchColorRatings({
       setCode,
-      startDate: queryRange.startDate,
-      endDate: queryRange.endDate,
+      startDate: searchRange.startDate,
+      endDate: searchRange.endDate,
     });
 
     if (hasPremierDraftGames(colorRatings)) {
-      return { range: queryRange, colorRatings, fallbackUsed };
+      if (!fallbackUsed) {
+        return { range: searchRange, colorRatings, fallbackUsed };
+      }
+
+      const expandedRange = expandRangeEarlier(searchRange, 14);
+      const expandedColorRatings = await fetchColorRatings({
+        setCode,
+        startDate: expandedRange.startDate,
+        endDate: expandedRange.endDate,
+      });
+
+      return {
+        range: expandedRange,
+        colorRatings: expandedColorRatings,
+        fallbackUsed,
+      };
     }
 
-    const previousChunk = getPreviousDateRange(chunkRange);
+    const previousChunk = getPreviousDateRange(searchRange);
     if (parseDate(previousChunk.endDate) <= setStartDate) {
       return { range: preferredRange, colorRatings, fallbackUsed: false };
     }
 
     fallbackUsed = true;
-    chunkRange = previousChunk;
-    queryRange = expandRangeEarlier(previousChunk, 14);
+    searchRange = previousChunk;
 
     if (checkedWindows % 3 === 0) {
-      onProgress?.(`Searching older Premier Draft data near ${queryRange.endDate}...`);
+      onProgress?.(`Searching older Premier Draft data near ${searchRange.endDate}...`);
     }
   }
 }
