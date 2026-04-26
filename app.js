@@ -18,6 +18,8 @@ const BASIC_LAND_COLORS = {
   forest: "G",
 };
 
+let filtersPromise;
+
 const COLOR_NAMES = {
   W: "White",
   U: "Blue",
@@ -162,6 +164,25 @@ function getDateRange() {
   };
 }
 
+function parseDate(dateString) {
+  return new Date(`${dateString}T00:00:00Z`);
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
+function getPreviousDateRange(range) {
+  const end = parseDate(range.startDate);
+  const start = addDays(end, -14);
+  return {
+    startDate: formatDate(start),
+    endDate: formatDate(end),
+  };
+}
+
 function formatPercent(value) {
   if (typeof value !== "number" || Number.isNaN(value)) return "-";
   return value.toLocaleString(undefined, {
@@ -285,7 +306,8 @@ async function fetchJson(url) {
 }
 
 async function fetchFilters() {
-  return fetchJson(buildUrl("/data/filters", {}));
+  filtersPromise ??= fetchJson(buildUrl("/data/filters", {}));
+  return filtersPromise;
 }
 
 async function fetchCardRatings({ setCode, startDate, endDate, colors }) {
@@ -352,6 +374,49 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
 
 function findColorRow(colorRatings, colorCode) {
   return colorRatings.find((row) => row.short_name === colorCode);
+}
+
+function hasPremierDraftGames(colorRatings) {
+  const allDecksRow = colorRatings.find((row) => row.short_name === "All");
+  return (allDecksRow?.games ?? 0) > 0;
+}
+
+function getSetStartDate(filters, setCode) {
+  const rawStartDate = filters.start_dates?.[setCode];
+  return rawStartDate ? new Date(rawStartDate) : new Date("2020-01-01T00:00:00Z");
+}
+
+async function findMostRecentAvailableRange(setCode, preferredRange, onProgress) {
+  const filters = await fetchFilters();
+  const setStartDate = getSetStartDate(filters, setCode);
+  let range = preferredRange;
+  let checkedWindows = 0;
+  let fallbackUsed = false;
+
+  for (;;) {
+    checkedWindows += 1;
+    const colorRatings = await fetchColorRatings({
+      setCode,
+      startDate: range.startDate,
+      endDate: range.endDate,
+    });
+
+    if (hasPremierDraftGames(colorRatings)) {
+      return { range, colorRatings, fallbackUsed };
+    }
+
+    const previousRange = getPreviousDateRange(range);
+    if (parseDate(previousRange.endDate) <= setStartDate) {
+      return { range: preferredRange, colorRatings, fallbackUsed: false };
+    }
+
+    fallbackUsed = true;
+    range = previousRange;
+
+    if (checkedWindows % 3 === 0) {
+      onProgress?.(`Searching older Premier Draft data near ${range.endDate}...`);
+    }
+  }
 }
 
 function countMatchedCards(cards, cardData) {
@@ -439,7 +504,14 @@ function showStatus(message, isError = false) {
   elements.status.classList.toggle("error", isError);
 }
 
-function renderResults({ setCode, colorCode, colorRow, range, cardStats }) {
+function renderResults({
+  setCode,
+  colorCode,
+  colorRow,
+  range,
+  cardStats,
+  fallbackUsed,
+}) {
   const pairWinRate =
     colorRow && colorRow.games > 0 ? colorRow.wins / colorRow.games : null;
 
@@ -450,7 +522,9 @@ function renderResults({ setCode, colorCode, colorRow, range, cardStats }) {
       ? "Unavailable"
       : `${formatPercent(pairWinRate)} (${formatInteger(colorRow.games)} games)`;
   elements.meanGih.textContent = formatPercent(cardStats.mean);
-  elements.dateRange.textContent = `${range.startDate} to ${range.endDate}`;
+  elements.dateRange.textContent = `${range.startDate} to ${range.endDate}${
+    fallbackUsed ? " (most recent available)" : ""
+  }`;
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
   renderTable(cardStats.rows);
@@ -470,23 +544,25 @@ async function rankExport() {
 
   try {
     const parsed = parseArenaExport(exportText);
-    const range = getDateRange();
+    const preferredRange = getDateRange();
     let setCode = parsed.setCode;
-    let allCardData;
 
     showStatus("Fetching 17Lands data...");
-    if (setCode) {
-      allCardData = await fetchCardRatings({
-        setCode,
-        startDate: range.startDate,
-        endDate: range.endDate,
-      });
-    } else {
+    if (!setCode) {
       showStatus("Inferring set from card names...");
-      const inferredSet = await inferSetFromCards(parsed.cards, range);
+      const inferredSet = await inferSetFromCards(parsed.cards, preferredRange);
       setCode = inferredSet.setCode;
-      allCardData = inferredSet.cardData;
     }
+
+    showStatus("Finding the latest Premier Draft data...");
+    const { range, colorRatings, fallbackUsed } =
+      await findMostRecentAvailableRange(setCode, preferredRange, showStatus);
+
+    const allCardData = await fetchCardRatings({
+      setCode,
+      startDate: range.startDate,
+      endDate: range.endDate,
+    });
 
     const allCardDataByName = buildCardDataMap(allCardData);
     const colorCode =
@@ -497,19 +573,12 @@ async function rankExport() {
       throw new Error("Could not infer a deck color pair from the export.");
     }
 
-    const [colorCardData, colorRatings] = await Promise.all([
-      fetchCardRatings({
-        setCode,
-        startDate: range.startDate,
-        endDate: range.endDate,
-        colors: colorCode,
-      }),
-      fetchColorRatings({
-        setCode,
-        startDate: range.startDate,
-        endDate: range.endDate,
-      }),
-    ]);
+    const colorCardData = await fetchCardRatings({
+      setCode,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      colors: colorCode,
+    });
 
     const colorRow = findColorRow(colorRatings, colorCode);
     const cardStats = calculateMeanGih(
@@ -524,6 +593,7 @@ async function rankExport() {
       colorRow,
       range,
       cardStats,
+      fallbackUsed,
     });
     if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
       showStatus("Done. 17Lands has little or no recent Premier Draft data for this set.");

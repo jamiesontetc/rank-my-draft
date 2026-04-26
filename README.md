@@ -13,6 +13,13 @@ Card GIH WR uses the identified color pair when available. If 17Lands does not
 publish a color-pair GIH value for a card, the app falls back to the all-decks
 GIH WR for that card.
 
+Exports without set codes are supported. In that case, the app infers the set
+from card names using 17Lands card-rating data.
+
+The app first checks the past two weeks of Premier Draft data. If no Premier
+Draft games are available for that set in the current window, it searches
+backward in two-week windows and uses the most recent window with games.
+
 ## Run Locally
 
 Start the included local server:
