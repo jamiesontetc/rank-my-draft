@@ -178,25 +178,29 @@ function formatInteger(value) {
 function parseArenaExport(text) {
   const cards = [];
   const setCounts = new Map();
-  const linePattern = /^\s*(\d+)\s+(.+?)\s+\(([A-Z0-9]{2,5})\)\s+\d+\s*$/i;
+  const linePattern = /^\s*(\d+)\s+(.+?)(?:\s+\(([A-Z0-9]{2,8})\)\s+\d+)?\s*$/i;
 
   for (const line of text.split(/\r?\n/)) {
+    if (/^\s*(deck|sideboard)\s*$/i.test(line)) continue;
+
     const match = line.match(linePattern);
     if (!match) continue;
 
     const quantity = Number(match[1]);
     const name = match[2].trim();
-    const setCode = match[3].toUpperCase();
+    const setCode = match[3]?.toUpperCase();
 
     cards.push({ quantity, name, setCode });
-    setCounts.set(setCode, (setCounts.get(setCode) ?? 0) + quantity);
+    if (setCode) {
+      setCounts.set(setCode, (setCounts.get(setCode) ?? 0) + quantity);
+    }
   }
 
   if (cards.length === 0) {
-    throw new Error("Paste a valid Arena export with card lines like: 1 Card Name (SOS) 123.");
+    throw new Error("Paste a valid Arena export with card lines like: 1 Card Name or 1 Card Name (SOS) 123.");
   }
 
-  const setCode = [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const setCode = [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   return { cards, setCode };
 }
 
@@ -266,11 +270,21 @@ function buildUrl(path, params) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    throw new Error("Could not fetch 17Lands data. Check your connection and try again.");
+  }
+
   if (!response.ok) {
     throw new Error(`17Lands request failed: ${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+async function fetchFilters() {
+  return fetchJson(buildUrl("/data/filters", {}));
 }
 
 async function fetchCardRatings({ setCode, startDate, endDate, colors }) {
@@ -337,6 +351,51 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
 
 function findColorRow(colorRatings, colorCode) {
   return colorRatings.find((row) => row.short_name === colorCode);
+}
+
+function countMatchedCards(cards, cardData) {
+  const cardDataByName = buildCardDataMap(cardData);
+  const uniqueNames = new Set(
+    cards.filter((card) => !isBasicLand(card)).map((card) => normalizeName(card.name))
+  );
+  let matches = 0;
+
+  for (const name of uniqueNames) {
+    if (cardDataByName.has(name)) matches += 1;
+  }
+
+  return matches;
+}
+
+async function inferSetFromCards(cards, range) {
+  const filters = await fetchFilters();
+  const expansions = filters.expansions ?? [];
+  const uniqueNonBasics = new Set(
+    cards.filter((card) => !isBasicLand(card)).map((card) => normalizeName(card.name))
+  );
+  const requiredMatches = Math.max(3, Math.ceil(uniqueNonBasics.size * 0.6));
+  let bestMatch = null;
+
+  for (const expansion of expansions) {
+    const cardData = await fetchCardRatings({
+      setCode: expansion,
+      startDate: range.startDate,
+      endDate: range.endDate,
+    });
+    const matches = countMatchedCards(cards, cardData);
+
+    if (!bestMatch || matches > bestMatch.matches) {
+      bestMatch = { setCode: expansion, cardData, matches };
+    }
+    if (matches >= requiredMatches) {
+      return bestMatch;
+    }
+  }
+
+  if (bestMatch?.matches > 0) {
+    return bestMatch;
+  }
+  throw new Error("Could not infer the set. Try pasting an Arena export that includes set codes.");
 }
 
 function clearTable() {
@@ -411,20 +470,23 @@ async function rankExport() {
   try {
     const parsed = parseArenaExport(exportText);
     const range = getDateRange();
+    let setCode = parsed.setCode;
+    let allCardData;
 
     showStatus("Fetching 17Lands data...");
-    const allCardsPromise = fetchCardRatings({
-      setCode: parsed.setCode,
-      startDate: range.startDate,
-      endDate: range.endDate,
-    });
-    const colorRatingsPromise = fetchColorRatings({
-      setCode: parsed.setCode,
-      startDate: range.startDate,
-      endDate: range.endDate,
-    });
+    if (setCode) {
+      allCardData = await fetchCardRatings({
+        setCode,
+        startDate: range.startDate,
+        endDate: range.endDate,
+      });
+    } else {
+      showStatus("Inferring set from card names...");
+      const inferredSet = await inferSetFromCards(parsed.cards, range);
+      setCode = inferredSet.setCode;
+      allCardData = inferredSet.cardData;
+    }
 
-    const allCardData = await allCardsPromise;
     const allCardDataByName = buildCardDataMap(allCardData);
     const colorCode =
       inferColorCodeFromLands(parsed.cards) ??
@@ -436,12 +498,16 @@ async function rankExport() {
 
     const [colorCardData, colorRatings] = await Promise.all([
       fetchCardRatings({
-        setCode: parsed.setCode,
+        setCode,
         startDate: range.startDate,
         endDate: range.endDate,
         colors: colorCode,
       }),
-      colorRatingsPromise,
+      fetchColorRatings({
+        setCode,
+        startDate: range.startDate,
+        endDate: range.endDate,
+      }),
     ]);
 
     const colorRow = findColorRow(colorRatings, colorCode);
@@ -452,13 +518,17 @@ async function rankExport() {
     );
 
     renderResults({
-      setCode: parsed.setCode,
+      setCode,
       colorCode,
       colorRow,
       range,
       cardStats,
     });
-    showStatus("Done.");
+    if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
+      showStatus("Done. 17Lands has little or no recent Premier Draft data for this set.");
+    } else {
+      showStatus("Done.");
+    }
   } catch (error) {
     showStatus(error.message, true);
   } finally {
