@@ -413,7 +413,7 @@ async function findMostRecentAvailableRange(setCode, preferredRange, onProgress)
         return { range: searchRange, colorRatings, fallbackUsed };
       }
 
-      const expandedRange = expandRangeEarlier(searchRange, 14);
+      const expandedRange = expandRangeEarlier(searchRange, 28);
       const expandedColorRatings = await fetchColorRatings({
         setCode,
         startDate: expandedRange.startDate,
