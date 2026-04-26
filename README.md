@@ -15,13 +15,17 @@ GIH WR for that card.
 
 ## Run Locally
 
-Open `index.html` in a browser, or serve the folder with any static web server.
+Start the included local server:
 
 ```sh
-python3 -m http.server 8080
+npm start
 ```
 
-Then visit `http://localhost:8080`.
+Then visit `http://127.0.0.1:8081`.
+
+The local server serves the app and proxies a small allowlist of 17Lands API
+endpoints. The proxy is needed because 17Lands does not send browser CORS
+headers consistently for every endpoint this tool uses.
 
 ## Data Source
 

@@ -1,4 +1,5 @@
-const API_BASE = "https://www.17lands.com";
+const API_BASE = window.location.origin;
+const API_PROXY_PREFIX = "/api/17lands";
 const FORMAT = "PremierDraft";
 const BASIC_LANDS = new Set([
   "plains",
@@ -260,7 +261,7 @@ function buildCardDataMap(cardData) {
 }
 
 function buildUrl(path, params) {
-  const url = new URL(path, API_BASE);
+  const url = new URL(`${API_PROXY_PREFIX}${path}`, API_BASE);
   Object.entries(params).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== "") {
       url.searchParams.set(key, value);
