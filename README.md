@@ -18,7 +18,8 @@ from card names using 17Lands card-rating data.
 
 The app first checks the past two weeks of Premier Draft data. If no Premier
 Draft games are available for that set in the current window, it searches
-backward in two-week windows and uses the most recent window with games.
+backward in two-week chunks. Each fallback query includes one extra earlier
+week, so fallback results use a three-week data window.
 
 ## Run Locally
 
