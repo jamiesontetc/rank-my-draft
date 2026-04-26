@@ -420,7 +420,7 @@ async function findMostRecentAvailableRange(setCode, preferredRange, onProgress)
 
     fallbackUsed = true;
     chunkRange = previousChunk;
-    queryRange = expandRangeEarlier(previousChunk, 7);
+    queryRange = expandRangeEarlier(previousChunk, 14);
 
     if (checkedWindows % 3 === 0) {
       onProgress?.(`Searching older Premier Draft data near ${queryRange.endDate}...`);
