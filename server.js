@@ -4,7 +4,7 @@ const { extname, join, normalize } = require("path");
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 8081);
-const ROOT = __dirname;
+const ROOT = join(__dirname, "public");
 const SEVENTEEN_LANDS_ORIGIN = "https://www.17lands.com";
 const ALLOWED_PROXY_PATHS = new Set([
   "/card_ratings/data",
