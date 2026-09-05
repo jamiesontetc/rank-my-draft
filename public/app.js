@@ -138,6 +138,8 @@ const elements = {
   dateRange: document.querySelector("#date-range"),
   cardsCounted: document.querySelector("#cards-counted"),
   fallbackCount: document.querySelector("#fallback-count"),
+  sideboardRow: document.querySelector("#sideboard-row"),
+  sideboardIgnored: document.querySelector("#sideboard-ignored"),
   cardTable: document.querySelector("#card-table"),
   emptyRowTemplate: document.querySelector("#empty-row-template"),
 };
@@ -206,11 +208,20 @@ function formatInteger(value) {
 
 function parseArenaExport(text) {
   const cards = [];
+  const sideboardCards = [];
   const setCounts = new Map();
   const linePattern = /^\s*(\d+)\s+(.+?)(?:\s+\(([A-Z0-9]{2,8})\)\s+\d+)?\s*$/i;
+  let section = "deck";
 
   for (const line of text.split(/\r?\n/)) {
-    if (/^\s*(deck|sideboard)\s*$/i.test(line)) continue;
+    if (/^\s*deck:?\s*$/i.test(line)) {
+      section = "deck";
+      continue;
+    }
+    if (/^\s*sideboard:?\s*$/i.test(line)) {
+      section = "sideboard";
+      continue;
+    }
 
     const match = line.match(linePattern);
     if (!match) continue;
@@ -218,8 +229,14 @@ function parseArenaExport(text) {
     const quantity = Number(match[1]);
     const name = match[2].trim();
     const setCode = match[3]?.toUpperCase();
+    const card = { quantity, name, setCode };
 
-    cards.push({ quantity, name, setCode });
+    if (section === "sideboard") {
+      sideboardCards.push(card);
+      continue;
+    }
+
+    cards.push(card);
     if (setCode) {
       setCounts.set(setCode, (setCounts.get(setCode) ?? 0) + quantity);
     }
@@ -230,7 +247,8 @@ function parseArenaExport(text) {
   }
 
   const setCode = [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  return { cards, setCode };
+  const sideboardCopies = sideboardCards.reduce((sum, card) => sum + card.quantity, 0);
+  return { cards, setCode, sideboardCopies };
 }
 
 function isBasicLand(card) {
@@ -526,6 +544,12 @@ function showStatus(message, isError = false) {
   elements.status.classList.toggle("error", isError);
 }
 
+function formatSideboardNote(sideboardCopies) {
+  if (!sideboardCopies) return "";
+  const noun = sideboardCopies === 1 ? "card" : "cards";
+  return ` ${sideboardCopies} sideboard ${noun} ignored for ranking.`;
+}
+
 function renderResults({
   setCode,
   colorCode,
@@ -533,6 +557,7 @@ function renderResults({
   range,
   cardStats,
   fallbackUsed,
+  sideboardCopies = 0,
 }) {
   const pairWinRate =
     colorRow && colorRow.games > 0 ? colorRow.wins / colorRow.games : null;
@@ -549,6 +574,13 @@ function renderResults({
   }`;
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
+  if (sideboardCopies > 0) {
+    elements.sideboardIgnored.textContent = `${formatInteger(sideboardCopies)} ignored for ranking`;
+    elements.sideboardRow.classList.remove("hidden");
+  } else {
+    elements.sideboardIgnored.textContent = "-";
+    elements.sideboardRow.classList.add("hidden");
+  }
   renderTable(cardStats.rows);
   elements.results.classList.remove("hidden");
 }
@@ -616,11 +648,15 @@ async function rankExport() {
       range,
       cardStats,
       fallbackUsed,
+      sideboardCopies: parsed.sideboardCopies,
     });
+    const sideboardNote = formatSideboardNote(parsed.sideboardCopies);
     if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
-      showStatus("Done. 17Lands has little or no recent Premier Draft data for this set.");
+      showStatus(
+        `Done. 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
+      );
     } else {
-      showStatus("Done.");
+      showStatus(`Done.${sideboardNote}`);
     }
   } catch (error) {
     showStatus(error.message, true);
