@@ -7,7 +7,11 @@ Paste an Arena export, click **Rank It**, and the app reports:
 - the inferred deck color pair
 - the set and set code
 - the 17Lands Premier Draft win rate for that color pair over the past two weeks
-- the mean GIH WR for the non-basic cards in the deck
+- the mean GIH WR for the non-basic cards in the main deck
+
+Sideboard cards in an Arena export are ignored for ranking, color-pair
+inference, and set detection. A paste with no Sideboard section behaves as
+before.
 
 Card GIH WR uses the identified color pair when available. If 17Lands does not
 publish a color-pair GIH value for a card, the app falls back to the all-decks
