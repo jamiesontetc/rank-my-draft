@@ -205,6 +205,64 @@ button.secondary:hover {
   line-height: 1.1;
 }
 
+.sideboard-picks {
+  margin-top: 24px;
+}
+
+.sideboard-picks-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.sideboard-picks-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sideboard-picks-grid article {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px;
+  background: #fff;
+}
+
+.sideboard-picks-grid h3 {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.sideboard-picks-grid ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sideboard-picks-grid li {
+  display: grid;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.sideboard-picks-grid li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.sideboard-picks-grid li span {
+  color: var(--muted);
+}
+
+.sideboard-pick-empty {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .details {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -277,7 +335,8 @@ tr:last-child td {
 @media (max-width: 820px) {
   .intro,
   .details,
-  .summary-grid {
+  .summary-grid,
+  .sideboard-picks-grid {
     grid-template-columns: 1fr;
   }
 

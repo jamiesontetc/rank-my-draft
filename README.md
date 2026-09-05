@@ -9,9 +9,19 @@ Paste an Arena export, click **Rank It**, and the app reports:
 - the 17Lands Premier Draft win rate for that color pair over the past two weeks
 - the mean GIH WR for the non-basic cards in the main deck
 
-Sideboard cards in an Arena export are ignored for ranking, color-pair
-inference, and set detection. A paste with no Sideboard section behaves as
-before.
+Sideboard cards in an Arena export are ignored for the main-deck mean GIH WR,
+color-pair inference, and set detection. A paste with no Sideboard section
+behaves as before.
+
+When a Sideboard section has rankable non-basic cards, the results also show
+up to two on-color and two off-color sideboard recommendations:
+
+- On-color picks use the deck’s color-pair GIH WR, falling back to all-decks
+  GIH only when the pair value is missing (same rule as the main table).
+- Off-color picks use all-decks GIH WR.
+- Basic lands are skipped. Cards are classified from 17Lands `color` (a card
+  is on-color when its colors are a subset of the inferred pair, including
+  colorless cards).
 
 Card GIH WR uses the identified color pair when available. If 17Lands does not
 publish a color-pair GIH value for a card, the app falls back to the all-decks

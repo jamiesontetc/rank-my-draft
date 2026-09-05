@@ -140,6 +140,9 @@ const elements = {
   fallbackCount: document.querySelector("#fallback-count"),
   sideboardRow: document.querySelector("#sideboard-row"),
   sideboardIgnored: document.querySelector("#sideboard-ignored"),
+  sideboardPicks: document.querySelector("#sideboard-picks"),
+  onColorPicks: document.querySelector("#on-color-picks"),
+  offColorPicks: document.querySelector("#off-color-picks"),
   cardTable: document.querySelector("#card-table"),
   emptyRowTemplate: document.querySelector("#empty-row-template"),
 };
@@ -248,7 +251,7 @@ function parseArenaExport(text) {
 
   const setCode = [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const sideboardCopies = sideboardCards.reduce((sum, card) => sum + card.quantity, 0);
-  return { cards, setCode, sideboardCopies };
+  return { cards, setCode, sideboardCards, sideboardCopies };
 }
 
 function isBasicLand(card) {
@@ -300,6 +303,54 @@ function inferColorCodeFromCards(cards, cardDataByName) {
     .sort((a, b) => b[1] - a[1])
     .map(([color]) => color);
   return canonicalColorCode(colors);
+}
+
+function getCardColors(card, cardDataByName) {
+  const basicColor = BASIC_LAND_COLORS[normalizeName(card.name)];
+  if (basicColor) return basicColor;
+  return cardDataByName.get(normalizeName(card.name))?.color ?? "";
+}
+
+function cardFitsColorCode(card, colorCode, cardDataByName) {
+  const colors = getCardColors(card, cardDataByName);
+  for (const color of colors) {
+    if (color in COLOR_NAMES && !colorCode.includes(color)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeCardsByName(cards) {
+  const byName = new Map();
+  for (const card of cards) {
+    const key = normalizeName(card.name);
+    const existing = byName.get(key);
+    if (existing) {
+      existing.quantity += card.quantity;
+    } else {
+      byName.set(key, { ...card });
+    }
+  }
+  return [...byName.values()];
+}
+
+function selectCardGih(card, colorByName, allByName, useColorPair = true) {
+  const key = normalizeName(card.name);
+  const colorRow = colorByName.get(key);
+  const allRow = allByName.get(key);
+  const selected =
+    useColorPair && colorRow && colorRow.ever_drawn_win_rate !== null
+      ? colorRow
+      : allRow;
+  const gihWr = selected?.ever_drawn_win_rate;
+  return {
+    quantity: card.quantity,
+    name: card.name,
+    source: selected === colorRow ? "Color pair" : "All decks",
+    games: selected?.ever_drawn_game_count ?? null,
+    gihWr: typeof gihWr === "number" ? gihWr : null,
+  };
 }
 
 function buildCardDataMap(cardData) {
@@ -367,26 +418,12 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
   let countedCopies = 0;
 
   for (const card of cards.filter((item) => !isBasicLand(item))) {
-    const key = normalizeName(card.name);
-    const colorRow = colorByName.get(key);
-    const allRow = allByName.get(key);
-    const selected =
-      colorRow && colorRow.ever_drawn_win_rate !== null ? colorRow : allRow;
-    const source = selected === colorRow ? "Color pair" : "All decks";
-    const gihWr = selected?.ever_drawn_win_rate;
-
-    if (typeof gihWr === "number") {
-      weightedTotal += gihWr * card.quantity;
+    const row = selectCardGih(card, colorByName, allByName, true);
+    if (typeof row.gihWr === "number") {
+      weightedTotal += row.gihWr * card.quantity;
       countedCopies += card.quantity;
     }
-
-    rows.push({
-      quantity: card.quantity,
-      name: card.name,
-      source,
-      games: selected?.ever_drawn_game_count ?? null,
-      gihWr: typeof gihWr === "number" ? gihWr : null,
-    });
+    rows.push(row);
   }
 
   return {
@@ -394,6 +431,39 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
     mean: countedCopies > 0 ? weightedTotal / countedCopies : null,
     countedCopies,
     fallbackCount: rows.filter((row) => row.source === "All decks").length,
+  };
+}
+
+function compareGihRows(a, b) {
+  return b.gihWr - a.gihWr || a.name.localeCompare(b.name);
+}
+
+function rankSideboardPicks(sideboardCards, colorCode, colorCardData, allCardData) {
+  const colorByName = buildCardDataMap(colorCardData);
+  const allByName = buildCardDataMap(allCardData);
+  const uniqueCards = mergeCardsByName(
+    sideboardCards.filter((card) => !isBasicLand(card))
+  );
+  const onColor = [];
+  const offColor = [];
+
+  for (const card of uniqueCards) {
+    if (cardFitsColorCode(card, colorCode, allByName)) {
+      const row = selectCardGih(card, colorByName, allByName, true);
+      if (typeof row.gihWr === "number") onColor.push(row);
+    } else {
+      const row = selectCardGih(card, colorByName, allByName, false);
+      if (typeof row.gihWr === "number") offColor.push(row);
+    }
+  }
+
+  onColor.sort(compareGihRows);
+  offColor.sort(compareGihRows);
+
+  return {
+    onColor: onColor.slice(0, 2),
+    offColor: offColor.slice(0, 2),
+    rankableCount: onColor.length + offColor.length,
   };
 }
 
@@ -547,7 +617,42 @@ function showStatus(message, isError = false) {
 function formatSideboardNote(sideboardCopies) {
   if (!sideboardCopies) return "";
   const noun = sideboardCopies === 1 ? "card" : "cards";
-  return ` ${sideboardCopies} sideboard ${noun} ignored for ranking.`;
+  return ` ${sideboardCopies} sideboard ${noun} ignored for the deck mean.`;
+}
+
+function renderPickList(listEl, rows) {
+  listEl.replaceChildren();
+  if (rows.length === 0) {
+    const li = document.createElement("li");
+    li.className = "sideboard-pick-empty";
+    li.textContent = "None";
+    listEl.append(li);
+    return;
+  }
+
+  for (const row of rows) {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = row.quantity > 1 ? `${row.quantity} ${row.name}` : row.name;
+    const meta = document.createElement("span");
+    meta.textContent = `${formatPercent(row.gihWr)} · ${row.source}`;
+    li.append(name, meta);
+    listEl.append(li);
+  }
+}
+
+function renderSideboardPicks(picks) {
+  const hasPicks = Boolean(picks?.rankableCount);
+  if (!hasPicks) {
+    elements.onColorPicks.replaceChildren();
+    elements.offColorPicks.replaceChildren();
+    elements.sideboardPicks.classList.add("hidden");
+    return;
+  }
+
+  renderPickList(elements.onColorPicks, picks.onColor);
+  renderPickList(elements.offColorPicks, picks.offColor);
+  elements.sideboardPicks.classList.remove("hidden");
 }
 
 function renderResults({
@@ -558,6 +663,7 @@ function renderResults({
   cardStats,
   fallbackUsed,
   sideboardCopies = 0,
+  sideboardPicks = null,
 }) {
   const pairWinRate =
     colorRow && colorRow.games > 0 ? colorRow.wins / colorRow.games : null;
@@ -575,12 +681,13 @@ function renderResults({
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
   if (sideboardCopies > 0) {
-    elements.sideboardIgnored.textContent = `${formatInteger(sideboardCopies)} ignored for ranking`;
+    elements.sideboardIgnored.textContent = `${formatInteger(sideboardCopies)} ignored for deck mean`;
     elements.sideboardRow.classList.remove("hidden");
   } else {
     elements.sideboardIgnored.textContent = "-";
     elements.sideboardRow.classList.add("hidden");
   }
+  renderSideboardPicks(sideboardPicks);
   renderTable(cardStats.rows);
   elements.results.classList.remove("hidden");
 }
@@ -640,6 +747,12 @@ async function rankExport() {
       colorCardData,
       allCardData
     );
+    const sideboardPicks = rankSideboardPicks(
+      parsed.sideboardCards,
+      colorCode,
+      colorCardData,
+      allCardData
+    );
 
     renderResults({
       setCode,
@@ -649,6 +762,7 @@ async function rankExport() {
       cardStats,
       fallbackUsed,
       sideboardCopies: parsed.sideboardCopies,
+      sideboardPicks,
     });
     const sideboardNote = formatSideboardNote(parsed.sideboardCopies);
     if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
