@@ -14,7 +14,7 @@ color-pair inference, and set detection. A paste with no Sideboard section
 behaves as before.
 
 When a Sideboard section has rankable non-basic cards, the results also show
-up to two on-color and two off-color sideboard recommendations:
+Sideboard Considerations with up to two on-color and two off-color picks:
 
 - On-color picks use the deck’s color-pair GIH WR, falling back to all-decks
   GIH only when the pair value is missing (same rule as the main table).
