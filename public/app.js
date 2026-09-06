@@ -146,6 +146,7 @@ const elements = {
   colorPair: document.querySelector("#color-pair"),
   setName: document.querySelector("#set-name"),
   pairWinRate: document.querySelector("#pair-win-rate"),
+  formatWinRate: document.querySelector("#format-win-rate"),
   meanGih: document.querySelector("#mean-gih"),
   dateRange: document.querySelector("#date-range"),
   cardsCounted: document.querySelector("#cards-counted"),
@@ -541,9 +542,18 @@ function findColorRow(colorRatings, colorCode) {
   return colorRatings.find((row) => row.short_name === colorCode);
 }
 
+function findAllDecksRow(colorRatings) {
+  return colorRatings.find((row) => row.short_name === "All");
+}
+
 function hasPremierDraftGames(colorRatings) {
-  const allDecksRow = colorRatings.find((row) => row.short_name === "All");
+  const allDecksRow = findAllDecksRow(colorRatings);
   return (allDecksRow?.games ?? 0) > 0;
+}
+
+function formatColorRatingWinRate(row) {
+  if (!row || !(row.games > 0)) return "Unavailable";
+  return `${formatPercent(row.wins / row.games)} (${formatInteger(row.games)} games)`;
 }
 
 function getSetStartDate(filters, setCode) {
@@ -809,21 +819,17 @@ function renderResults({
   setCode,
   colorCode,
   colorRow,
+  allDecksRow,
   range,
   cardStats,
   fallbackUsed,
   sideboardCopies = 0,
   sideboardPicks = null,
 }) {
-  const pairWinRate =
-    colorRow && colorRow.games > 0 ? colorRow.wins / colorRow.games : null;
-
   elements.colorPair.textContent = describeColorCode(colorCode);
   elements.setName.textContent = formatExpansionLabel(setCode);
-  elements.pairWinRate.textContent =
-    pairWinRate === null
-      ? "Unavailable"
-      : `${formatPercent(pairWinRate)} (${formatInteger(colorRow.games)} games)`;
+  elements.pairWinRate.textContent = formatColorRatingWinRate(colorRow);
+  elements.formatWinRate.textContent = formatColorRatingWinRate(allDecksRow);
   elements.meanGih.textContent = formatPercent(cardStats.mean);
   elements.dateRange.textContent = `${range.startDate} to ${range.endDate}${
     fallbackUsed ? " (most recent available)" : ""
@@ -923,6 +929,7 @@ async function rankExport() {
     });
 
     const colorRow = findColorRow(colorRatings, colorCode);
+    const allDecksRow = findAllDecksRow(colorRatings);
     const cardStats = calculateMeanGih(
       parsed.cards,
       colorCardData,
@@ -939,6 +946,7 @@ async function rankExport() {
       setCode,
       colorCode,
       colorRow,
+      allDecksRow,
       range,
       cardStats,
       fallbackUsed,
