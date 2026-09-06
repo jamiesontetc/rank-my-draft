@@ -323,10 +323,32 @@ function selectedCubeExpansion(available) {
   return available.includes(value) ? value : "";
 }
 
-function formatExpansionLabel(setCode) {
-  if (isCubeLikeExpansion(setCode)) return setCode;
+function expansionDisplayParts(setCode) {
+  if (typeof setCode !== "string" || setCode.length === 0) {
+    return { name: "-", code: "" };
+  }
+
+  const labeled = setCode.match(/^(.*?)\s+\(([^()]+)\)\s*$/);
+  if (labeled) {
+    return { name: labeled[1], code: labeled[2] };
+  }
+
+  if (isCubeLikeExpansion(setCode)) {
+    return { name: setCode, code: "" };
+  }
+
   const name = SET_NAMES[setCode];
-  return name ? `${name} (${setCode})` : setCode;
+  return name ? { name, code: setCode } : { name: setCode, code: "" };
+}
+
+function setPrimaryWithNote(element, primary, note) {
+  element.replaceChildren();
+  element.append(primary);
+  if (!note) return;
+  const suffix = document.createElement("span");
+  suffix.className = "value-note";
+  suffix.textContent = note.startsWith(" ") ? note : ` ${note}`;
+  element.append(suffix);
 }
 
 function getBasicLandColorCounts(cards) {
@@ -552,8 +574,11 @@ function hasPremierDraftGames(colorRatings) {
 }
 
 function formatColorRatingWinRate(row) {
-  if (!row || !(row.games > 0)) return "Unavailable";
-  return `${formatPercent(row.wins / row.games)} (${formatInteger(row.games)} games)`;
+  if (!row || !(row.games > 0)) return { primary: "Unavailable", note: "" };
+  return {
+    primary: formatPercent(row.wins / row.games),
+    note: `(${formatInteger(row.games)} games)`,
+  };
 }
 
 function getSetStartDate(filters, setCode) {
@@ -827,9 +852,16 @@ function renderResults({
   sideboardPicks = null,
 }) {
   elements.colorPair.textContent = describeColorCode(colorCode);
-  elements.setName.textContent = formatExpansionLabel(setCode);
-  elements.pairWinRate.textContent = formatColorRatingWinRate(colorRow);
-  elements.formatWinRate.textContent = formatColorRatingWinRate(allDecksRow);
+  const expansion = expansionDisplayParts(setCode);
+  setPrimaryWithNote(
+    elements.setName,
+    expansion.name,
+    expansion.code ? `(${expansion.code})` : ""
+  );
+  const pairWinRate = formatColorRatingWinRate(colorRow);
+  setPrimaryWithNote(elements.pairWinRate, pairWinRate.primary, pairWinRate.note);
+  const formatWinRate = formatColorRatingWinRate(allDecksRow);
+  setPrimaryWithNote(elements.formatWinRate, formatWinRate.primary, formatWinRate.note);
   elements.meanGih.textContent = formatPercent(cardStats.mean);
   elements.dateRange.textContent = `${range.startDate} to ${range.endDate}${
     fallbackUsed ? " (most recent available)" : ""
@@ -959,7 +991,7 @@ async function rankExport() {
       : "";
     if (usedCubeSource && colorRow && colorRow.games > 0 && cardStats.mean === null) {
       showStatus(
-        `Done.${cubeNote} Color-pair data is available; card GIH WR is not published for this cube window.${sideboardNote}`
+        `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this cube window.${sideboardNote}`
       );
     } else if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
       showStatus(

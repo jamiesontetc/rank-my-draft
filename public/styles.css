@@ -248,6 +248,10 @@ select {
   line-height: 1.1;
 }
 
+.summary-grid .value-note {
+  font-weight: 400;
+}
+
 .sideboard-picks {
   margin-top: 24px;
 }
