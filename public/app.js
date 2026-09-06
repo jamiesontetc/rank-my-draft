@@ -19,6 +19,7 @@ const BASIC_LAND_COLORS = {
 };
 
 let filtersPromise;
+let cubeSourcesPromise;
 
 const COLOR_NAMES = {
   W: "White",
@@ -63,6 +64,17 @@ const PAIR_CODES = {
   GU: "UG",
   UG: "UG",
 };
+
+const KNOWN_CUBE_EXPANSIONS = [
+  "Cube - Planar",
+  "Cube - Powered",
+  "Cube",
+  "Chaos",
+  "Remix - Artifacts",
+];
+
+const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
+const CUBE_HISTORY_START = "2020-01-01";
 
 const SET_NAMES = {
   SOS: "Secrets of Strixhaven",
@@ -145,6 +157,9 @@ const elements = {
   offColorPicks: document.querySelector("#off-color-picks"),
   cardTable: document.querySelector("#card-table"),
   emptyRowTemplate: document.querySelector("#empty-row-template"),
+  forceCube: document.querySelector("#force-cube"),
+  cubeSourceRow: document.querySelector("#cube-source-row"),
+  cubeSource: document.querySelector("#cube-source"),
 };
 
 function normalizeName(value) {
@@ -256,6 +271,61 @@ function parseArenaExport(text) {
 
 function isBasicLand(card) {
   return BASIC_LANDS.has(normalizeName(card.name));
+}
+
+function collectCodedSetCounts(cards) {
+  const setCounts = new Map();
+  let codedCopies = 0;
+
+  for (const card of cards) {
+    if (!card.setCode || isBasicLand(card)) continue;
+    setCounts.set(card.setCode, (setCounts.get(card.setCode) ?? 0) + card.quantity);
+    codedCopies += card.quantity;
+  }
+
+  return { setCounts, codedCopies };
+}
+
+function isLikelyCubeExport(cards) {
+  const { setCounts, codedCopies } = collectCodedSetCounts(cards);
+  const distinctSets = setCounts.size;
+  if (codedCopies === 0 || distinctSets < 3) return false;
+  if (distinctSets >= 4) return true;
+
+  const topShare = Math.max(...setCounts.values()) / codedCopies;
+  return topShare < 0.7;
+}
+
+function isCubeLikeExpansion(name) {
+  if (typeof name !== "string" || name.length === 0) return false;
+  return /^Cube/i.test(name) || KNOWN_CUBE_EXPANSIONS.includes(name);
+}
+
+function expansionSupportsFormat(filters, expansion, format) {
+  const formats = filters.formats_by_expansion?.[expansion];
+  if (!Array.isArray(formats) || formats.length === 0) return true;
+  return formats.includes(format);
+}
+
+function sortCubeExpansions(expansions) {
+  return [...expansions].sort((a, b) => {
+    const aKnown = KNOWN_CUBE_EXPANSIONS.indexOf(a);
+    const bKnown = KNOWN_CUBE_EXPANSIONS.indexOf(b);
+    const aOrder = aKnown === -1 ? KNOWN_CUBE_EXPANSIONS.length : aKnown;
+    const bOrder = bKnown === -1 ? KNOWN_CUBE_EXPANSIONS.length : bKnown;
+    return aOrder - bOrder || a.localeCompare(b);
+  });
+}
+
+function selectedCubeExpansion(available) {
+  const value = elements.cubeSource.value;
+  return available.includes(value) ? value : "";
+}
+
+function formatExpansionLabel(setCode) {
+  if (isCubeLikeExpansion(setCode)) return setCode;
+  const name = SET_NAMES[setCode];
+  return name ? `${name} (${setCode})` : setCode;
 }
 
 function getBasicLandColorCounts(cards) {
@@ -517,6 +587,25 @@ async function findMostRecentAvailableRange(setCode, preferredRange, onProgress)
 
     const previousChunk = getPreviousDateRange(searchRange);
     if (parseDate(previousChunk.endDate) <= setStartDate) {
+      if (isCubeLikeExpansion(setCode)) {
+        onProgress?.(`Searching older Premier Draft data for ${setCode}...`);
+        const wideRange = {
+          startDate: CUBE_HISTORY_START,
+          endDate: preferredRange.endDate,
+        };
+        const wideColorRatings = await fetchColorRatings({
+          setCode,
+          startDate: wideRange.startDate,
+          endDate: wideRange.endDate,
+        });
+        if (hasPremierDraftGames(wideColorRatings)) {
+          return {
+            range: wideRange,
+            colorRatings: wideColorRatings,
+            fallbackUsed: true,
+          };
+        }
+      }
       return { range: preferredRange, colorRatings, fallbackUsed: false };
     }
 
@@ -574,6 +663,64 @@ async function inferSetFromCards(cards, range) {
   throw new Error("Could not infer the set. Try pasting an Arena export that includes set codes.");
 }
 
+async function discoverUsableCubeExpansions(preferredRange, onProgress) {
+  const filters = await fetchFilters();
+  const candidates = sortCubeExpansions(
+    (filters.expansions ?? []).filter(
+      (expansion) =>
+        isCubeLikeExpansion(expansion) &&
+        expansionSupportsFormat(filters, expansion, FORMAT)
+    )
+  );
+
+  if (candidates.length === 0) return [];
+
+  onProgress?.("Checking 17Lands cube sources...");
+  const found = await Promise.all(
+    candidates.map(async (expansion) => {
+      const result = await findMostRecentAvailableRange(expansion, preferredRange);
+      return hasPremierDraftGames(result.colorRatings) ? expansion : null;
+    })
+  );
+
+  return found.filter(Boolean);
+}
+
+async function listUsableCubeExpansions(preferredRange, onProgress) {
+  cubeSourcesPromise ??= discoverUsableCubeExpansions(preferredRange, onProgress).catch(
+    (error) => {
+      cubeSourcesPromise = null;
+      throw error;
+    }
+  );
+  return cubeSourcesPromise;
+}
+
+function showCubeSourceRow(visible) {
+  elements.cubeSourceRow.classList.toggle("hidden", !visible);
+}
+
+function resetCubeSourceSelection() {
+  elements.cubeSource.replaceChildren();
+  elements.cubeSource.value = "";
+}
+
+function populateCubeDropdown(available, selected) {
+  elements.cubeSource.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = CUBE_SOURCE_PLACEHOLDER;
+  elements.cubeSource.append(placeholder);
+  for (const expansion of available) {
+    const option = document.createElement("option");
+    option.value = expansion;
+    option.textContent = expansion;
+    elements.cubeSource.append(option);
+  }
+  elements.cubeSource.value =
+    selected && available.includes(selected) ? selected : "";
+}
+
 function clearTable() {
   elements.cardTable.replaceChildren();
 }
@@ -607,6 +754,9 @@ function renderTable(rows) {
 function setLoading(isLoading) {
   elements.rankButton.disabled = isLoading;
   elements.rankButton.textContent = isLoading ? "Ranking..." : "Rank It";
+  elements.sampleButton.disabled = isLoading;
+  elements.cubeSource.disabled = isLoading;
+  elements.forceCube.disabled = isLoading;
 }
 
 function showStatus(message, isError = false) {
@@ -669,7 +819,7 @@ function renderResults({
     colorRow && colorRow.games > 0 ? colorRow.wins / colorRow.games : null;
 
   elements.colorPair.textContent = describeColorCode(colorCode);
-  elements.setName.textContent = `${SET_NAMES[setCode] ?? setCode} (${setCode})`;
+  elements.setName.textContent = formatExpansionLabel(setCode);
   elements.pairWinRate.textContent =
     pairWinRate === null
       ? "Unavailable"
@@ -706,16 +856,47 @@ async function rankExport() {
   try {
     const parsed = parseArenaExport(exportText);
     const preferredRange = getDateRange();
+    const likelyCube =
+      Boolean(elements.forceCube.checked) || isLikelyCubeExport(parsed.cards);
     let setCode = parsed.setCode;
+    let usedCubeSource = false;
 
     showStatus("Fetching 17Lands data...");
-    if (!setCode) {
-      showStatus("Inferring set from card names...");
-      const inferredSet = await inferSetFromCards(parsed.cards, preferredRange);
-      setCode = inferredSet.setCode;
+    if (likelyCube) {
+      const availableCubes = await listUsableCubeExpansions(
+        preferredRange,
+        showStatus
+      );
+      const selectedCube = selectedCubeExpansion(availableCubes);
+      populateCubeDropdown(availableCubes, selectedCube);
+      showCubeSourceRow(true);
+
+      if (availableCubes.length === 0) {
+        throw new Error(
+          "Detected a cube export, but no 17Lands cube sources have Premier Draft data."
+        );
+      }
+      if (!selectedCube) {
+        showStatus("Select a cube from Cube / 17Lands source to rank this export.");
+        return;
+      }
+
+      setCode = selectedCube;
+      usedCubeSource = true;
+    } else {
+      showCubeSourceRow(false);
+      if (!setCode) {
+        showStatus("Inferring set from card names...");
+        const inferredSet = await inferSetFromCards(parsed.cards, preferredRange);
+        setCode = inferredSet.setCode;
+      }
     }
 
-    showStatus("Finding the latest Premier Draft data...");
+    showStatus(
+      usedCubeSource
+        ? `Finding Premier Draft data for ${setCode}...`
+        : "Finding the latest Premier Draft data..."
+    );
     const { range, colorRatings, fallbackUsed } =
       await findMostRecentAvailableRange(setCode, preferredRange, showStatus);
 
@@ -765,12 +946,19 @@ async function rankExport() {
       sideboardPicks,
     });
     const sideboardNote = formatSideboardNote(parsed.sideboardCopies);
-    if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
+    const cubeNote = usedCubeSource
+      ? ` Using 17Lands cube source: ${setCode}.`
+      : "";
+    if (usedCubeSource && colorRow && colorRow.games > 0 && cardStats.mean === null) {
       showStatus(
-        `Done. 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
+        `Done.${cubeNote} Color-pair data is available; card GIH WR is not published for this cube window.${sideboardNote}`
+      );
+    } else if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
+      showStatus(
+        `Done.${cubeNote} 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
       );
     } else {
-      showStatus(`Done.${sideboardNote}`);
+      showStatus(`Done.${cubeNote}${sideboardNote}`);
     }
   } catch (error) {
     showStatus(error.message, true);
@@ -782,6 +970,14 @@ async function rankExport() {
 elements.rankButton.addEventListener("click", rankExport);
 elements.sampleButton.addEventListener("click", () => {
   elements.textarea.value = SAMPLE_EXPORT;
+  elements.forceCube.checked = false;
+  resetCubeSourceSelection();
+  showCubeSourceRow(false);
   elements.textarea.focus();
   showStatus("Sample loaded.");
+});
+elements.cubeSource.addEventListener("change", () => {
+  if (elements.textarea.value.trim() && !elements.rankButton.disabled) {
+    rankExport();
+  }
 });

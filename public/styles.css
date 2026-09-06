@@ -110,7 +110,9 @@ textarea {
 }
 
 textarea:focus,
-button:focus-visible {
+button:focus-visible,
+select:focus-visible,
+.cube-force input:focus-visible {
   outline: 3px solid var(--accent-soft);
   outline-offset: 2px;
 }
@@ -118,6 +120,7 @@ button:focus-visible {
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-top: 16px;
 }
@@ -150,6 +153,46 @@ button.secondary {
 
 button.secondary:hover {
   background: #ded8cb;
+}
+
+.cube-force {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cube-force input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.cube-source-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cube-source-row.hidden {
+  display: none;
+}
+
+.cube-source-row label {
+  margin-bottom: 0;
+}
+
+select {
+  font: inherit;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink);
 }
 
 .status {
