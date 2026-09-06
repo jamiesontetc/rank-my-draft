@@ -30,6 +30,15 @@ GIH WR for that card.
 Exports without set codes are supported. In that case, the app infers the set
 from card names using 17Lands card-rating data.
 
+Multi-set Arena cube exports (many different `(SET)` codes in the main deck)
+are detected as cubes. Ranking then uses 17Lands cube expansions such as
+`Cube - Planar`, `Cube - Powered`, `Cube`, `Chaos`, and `Remix - Artifacts`
+instead of a single premier-draft set code. A **Cube / 17Lands source**
+dropdown lists cube expansions that have Premier Draft data for the current
+format; `Cube - Planar` is selected automatically when it has data. Check
+**This is a cube** to force cube mode when the paste is mixed but does not
+trip the heuristic. Single-set Premier Draft pastes are unchanged.
+
 The app first checks the past two weeks of Premier Draft data. If no Premier
 Draft games are available for that set in the current window, it searches
 backward in two-week chunks until it finds games. It then expands that found

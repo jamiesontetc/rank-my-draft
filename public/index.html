@@ -19,7 +19,8 @@
         </div>
         <p class="source-note">
           Paste an MTG Arena deck export. Results use public 17Lands data for
-          Premier Draft.
+          Premier Draft. Multi-set cube exports are ranked against 17Lands cube
+          sources.
         </p>
       </section>
 
@@ -35,6 +36,14 @@
           <button id="sample-button" class="secondary" type="button">
             Load Sample
           </button>
+          <label class="cube-force" for="force-cube">
+            <input id="force-cube" type="checkbox" />
+            This is a cube
+          </label>
+        </div>
+        <div id="cube-source-row" class="cube-source-row hidden">
+          <label for="cube-source">Cube / 17Lands source</label>
+          <select id="cube-source"></select>
         </div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </section>
@@ -130,6 +139,6 @@
       </tr>
     </template>
 
-    <script src="app.js?v=10" defer></script>
+    <script src="app.js?v=11" defer></script>
   </body>
 </html>
