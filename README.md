@@ -35,9 +35,10 @@ are detected as cubes. Ranking then uses 17Lands cube expansions such as
 `Cube - Planar`, `Cube - Powered`, `Cube`, `Chaos`, and `Remix - Artifacts`
 instead of a single premier-draft set code. A **Cube / 17Lands source**
 dropdown lists cube expansions that have Premier Draft data for the current
-format; `Cube - Planar` is selected automatically when it has data. Check
-**This is a cube** to force cube mode when the paste is mixed but does not
-trip the heuristic. Single-set Premier Draft pastes are unchanged.
+format. Choose a source from the list to rank; nothing is selected
+automatically. Check **This is a cube** to force cube mode when the paste
+is mixed but does not trip the heuristic. Single-set Premier Draft pastes
+are unchanged.
 
 The app first checks the past two weeks of Premier Draft data. If no Premier
 Draft games are available for that set in the current window, it searches

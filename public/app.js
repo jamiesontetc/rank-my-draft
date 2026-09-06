@@ -73,7 +73,7 @@ const KNOWN_CUBE_EXPANSIONS = [
   "Remix - Artifacts",
 ];
 
-const PREFERRED_CUBE_EXPANSION = "Cube - Planar";
+const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
 const CUBE_HISTORY_START = "2020-01-01";
 
 const SET_NAMES = {
@@ -317,11 +317,9 @@ function sortCubeExpansions(expansions) {
   });
 }
 
-function pickCubeExpansion(available, previous) {
-  if (previous && available.includes(previous)) return previous;
-  if (available.includes(PREFERRED_CUBE_EXPANSION)) return PREFERRED_CUBE_EXPANSION;
-  if (available.length === 1) return available[0];
-  return available[0] ?? "";
+function selectedCubeExpansion(available) {
+  const value = elements.cubeSource.value;
+  return available.includes(value) ? value : "";
 }
 
 function formatExpansionLabel(setCode) {
@@ -702,17 +700,25 @@ function showCubeSourceRow(visible) {
   elements.cubeSourceRow.classList.toggle("hidden", !visible);
 }
 
+function resetCubeSourceSelection() {
+  elements.cubeSource.replaceChildren();
+  elements.cubeSource.value = "";
+}
+
 function populateCubeDropdown(available, selected) {
   elements.cubeSource.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = CUBE_SOURCE_PLACEHOLDER;
+  elements.cubeSource.append(placeholder);
   for (const expansion of available) {
     const option = document.createElement("option");
     option.value = expansion;
     option.textContent = expansion;
     elements.cubeSource.append(option);
   }
-  if (selected && available.includes(selected)) {
-    elements.cubeSource.value = selected;
-  }
+  elements.cubeSource.value =
+    selected && available.includes(selected) ? selected : "";
 }
 
 function clearTable() {
@@ -861,21 +867,22 @@ async function rankExport() {
         preferredRange,
         showStatus
       );
-      const selectedCube = pickCubeExpansion(
-        availableCubes,
-        elements.cubeSource.value
-      );
+      const selectedCube = selectedCubeExpansion(availableCubes);
       populateCubeDropdown(availableCubes, selectedCube);
-      showCubeSourceRow(availableCubes.length > 0);
+      showCubeSourceRow(true);
 
-      if (selectedCube) {
-        setCode = selectedCube;
-        usedCubeSource = true;
-      } else if (!setCode) {
+      if (availableCubes.length === 0) {
         throw new Error(
           "Detected a cube export, but no 17Lands cube sources have Premier Draft data."
         );
       }
+      if (!selectedCube) {
+        showStatus("Select a cube from Cube / 17Lands source to rank this export.");
+        return;
+      }
+
+      setCode = selectedCube;
+      usedCubeSource = true;
     } else {
       showCubeSourceRow(false);
       if (!setCode) {
@@ -964,6 +971,7 @@ elements.rankButton.addEventListener("click", rankExport);
 elements.sampleButton.addEventListener("click", () => {
   elements.textarea.value = SAMPLE_EXPORT;
   elements.forceCube.checked = false;
+  resetCubeSourceSelection();
   showCubeSourceRow(false);
   elements.textarea.focus();
   showStatus("Sample loaded.");
