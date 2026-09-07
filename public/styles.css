@@ -233,7 +233,7 @@ select {
   background: #fff;
 }
 
-.summary-grid span {
+.summary-grid article > span {
   display: block;
   margin-bottom: 10px;
   color: var(--muted);
@@ -246,6 +246,10 @@ select {
   display: block;
   font-size: 1.7rem;
   line-height: 1.1;
+}
+
+.summary-grid .value-note {
+  font-weight: 400;
 }
 
 .sideboard-picks {
