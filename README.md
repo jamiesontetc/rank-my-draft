@@ -40,11 +40,17 @@ automatically. Check **This is a cube** to force cube mode when the paste
 is mixed but does not trip the heuristic. Single-set Premier Draft pastes
 are unchanged.
 
-The app first checks the past two weeks of Premier Draft data. If no Premier
-Draft games are available for that set in the current window, it searches
-backward in two-week chunks until it finds games. It then expands that found
-chunk by adding four earlier weeks, so fallback results use a six-week data
-window.
+The app first checks the past two weeks of Premier Draft data. If that window
+has no Premier Draft games, it tries a wider ~12-week window ending on the
+same day, then walks backward in two-week chunks until it finds games. A
+found older chunk is expanded by ten earlier weeks (~12-week sample). The
+walk stops at the expansion’s `start_date` from 17Lands `/data/filters`, or
+after 26 two-week steps (~12 months), whichever comes first. Cube expansions
+ignore placeholder start dates and, if the chunk walk misses, fall back to
+an all-time query from 2020-01-01. Intermediate windows that already had
+games keep their color-pair and all-decks win rates when a wider query does
+not. Fallback results label the date range as most recent available and show
+pair / all-decks win rates for the window actually used.
 
 ## Project Layout
 
