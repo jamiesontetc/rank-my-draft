@@ -76,6 +76,18 @@ const KNOWN_CUBE_EXPANSIONS = [
 const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
 const CUBE_HISTORY_START = "2020-01-01";
 
+// Fallback search when the last two weeks have no Premier Draft games.
+// 1) Try a ~12-week window (preferred 14 days + FALLBACK_EXPAND_DAYS).
+// 2) Walk 14-day chunks backward, up to FALLBACK_MAX_CHUNKS (~12 months)
+//    or filters.start_date. Cubes ignore placeholder start_dates.
+// 3) Expand a found older chunk by FALLBACK_EXPAND_DAYS; keep the found
+//    chunk's color ratings if the wider query has no games.
+// 4) Last resort: one wide query from set start (cubes: CUBE_HISTORY_START).
+// See README.
+const FALLBACK_CHUNK_DAYS = 14;
+const FALLBACK_MAX_CHUNKS = 26;
+const FALLBACK_EXPAND_DAYS = 70;
+
 const SET_NAMES = {
   SOS: "Secrets of Strixhaven",
   TMT: "Ninja Turtles",
@@ -149,6 +161,7 @@ const elements = {
   formatWinRate: document.querySelector("#format-win-rate"),
   meanGih: document.querySelector("#mean-gih"),
   dateRange: document.querySelector("#date-range"),
+  dataWindow: document.querySelector("#data-window"),
   cardsCounted: document.querySelector("#cards-counted"),
   fallbackCount: document.querySelector("#fallback-count"),
   sideboardRow: document.querySelector("#sideboard-row"),
@@ -178,7 +191,7 @@ function formatDate(date) {
 function getDateRange() {
   const end = new Date();
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - 14);
+  start.setUTCDate(start.getUTCDate() - FALLBACK_CHUNK_DAYS);
   return {
     startDate: formatDate(start),
     endDate: formatDate(end),
@@ -197,11 +210,23 @@ function addDays(date, days) {
 
 function getPreviousDateRange(range) {
   const end = parseDate(range.startDate);
-  const start = addDays(end, -14);
+  const start = addDays(end, -FALLBACK_CHUNK_DAYS);
   return {
     startDate: formatDate(start),
     endDate: formatDate(end),
   };
+}
+
+function clampRangeStart(range, floorDate) {
+  if (parseDate(range.startDate) >= floorDate) return range;
+  return {
+    startDate: formatDate(floorDate),
+    endDate: range.endDate,
+  };
+}
+
+function rangesEqual(a, b) {
+  return a.startDate === b.startDate && a.endDate === b.endDate;
 }
 
 function expandRangeEarlier(range, days) {
@@ -573,84 +598,143 @@ function hasPremierDraftGames(colorRatings) {
   return (allDecksRow?.games ?? 0) > 0;
 }
 
-function formatColorRatingWinRate(row) {
-  if (!row || !(row.games > 0)) return { primary: "Unavailable", note: "" };
+function formatColorRatingWinRate(row, { fallbackUsed } = {}) {
+  if (!row || !(row.games > 0)) {
+    return {
+      primary: "Unavailable",
+      note: fallbackUsed ? "(no games in fallback window)" : "",
+    };
+  }
+  const gamesNote = `(${formatInteger(row.games)} games)`;
   return {
     primary: formatPercent(row.wins / row.games),
-    note: `(${formatInteger(row.games)} games)`,
+    note: fallbackUsed ? `${gamesNote} fallback window` : gamesNote,
   };
 }
 
 function getSetStartDate(filters, setCode) {
   const rawStartDate = filters.start_dates?.[setCode];
-  return rawStartDate ? new Date(rawStartDate) : new Date("2020-01-01T00:00:00Z");
+  return rawStartDate ? new Date(rawStartDate) : parseDate(CUBE_HISTORY_START);
 }
 
-async function findMostRecentAvailableRange(setCode, preferredRange, onProgress) {
+function getSearchFloorDate(filters, setCode) {
+  if (isCubeLikeExpansion(setCode)) {
+    // 17Lands cube start_dates are recent placeholders, not real event starts.
+    return parseDate(CUBE_HISTORY_START);
+  }
+  return getSetStartDate(filters, setCode);
+}
+
+async function fetchColorRatingsForRange(setCode, range) {
+  return fetchColorRatings({
+    setCode,
+    startDate: range.startDate,
+    endDate: range.endDate,
+  });
+}
+
+async function expandFoundFallback(setCode, foundRange, foundRatings, walkFloor) {
+  const expandedRange = clampRangeStart(
+    expandRangeEarlier(foundRange, FALLBACK_EXPAND_DAYS),
+    walkFloor
+  );
+  if (rangesEqual(expandedRange, foundRange)) {
+    return { range: foundRange, colorRatings: foundRatings, fallbackUsed: true };
+  }
+
+  const expandedRatings = await fetchColorRatingsForRange(setCode, expandedRange);
+  if (hasPremierDraftGames(expandedRatings)) {
+    return { range: expandedRange, colorRatings: expandedRatings, fallbackUsed: true };
+  }
+
+  // Keep the intermediate window that already had games so pair / all-decks
+  // win rates stay visible instead of going blank after a wider query.
+  return { range: foundRange, colorRatings: foundRatings, fallbackUsed: true };
+}
+
+async function findMostRecentAvailableRange(
+  setCode,
+  preferredRange,
+  onProgress,
+  options = {}
+) {
   const filters = await fetchFilters();
-  const setStartDate = getSetStartDate(filters, setCode);
+  const walkFloor = getSearchFloorDate(filters, setCode);
+  const cubeLike = isCubeLikeExpansion(setCode);
+  const maxChunks = options.maxChunks ?? FALLBACK_MAX_CHUNKS;
+  const deepSearch = options.deepSearch !== false;
   let searchRange = preferredRange;
   let checkedWindows = 0;
-  let fallbackUsed = false;
+  let lastEmptyRatings = [];
 
-  for (;;) {
+  const colorRatings = await fetchColorRatingsForRange(setCode, searchRange);
+  checkedWindows += 1;
+
+  if (hasPremierDraftGames(colorRatings)) {
+    return { range: searchRange, colorRatings, fallbackUsed: false };
+  }
+  lastEmptyRatings = colorRatings;
+
+  // Wider net before walking: last ~12 weeks ending on the preferred end date.
+  onProgress?.(`Searching older Premier Draft data near ${preferredRange.endDate}...`);
+  const nearTermRange = clampRangeStart(
+    expandRangeEarlier(preferredRange, FALLBACK_EXPAND_DAYS),
+    walkFloor
+  );
+  if (!rangesEqual(nearTermRange, preferredRange)) {
+    const nearTermRatings = await fetchColorRatingsForRange(setCode, nearTermRange);
     checkedWindows += 1;
-    const colorRatings = await fetchColorRatings({
-      setCode,
-      startDate: searchRange.startDate,
-      endDate: searchRange.endDate,
-    });
+    if (hasPremierDraftGames(nearTermRatings)) {
+      return { range: nearTermRange, colorRatings: nearTermRatings, fallbackUsed: true };
+    }
+    lastEmptyRatings = nearTermRatings;
+    searchRange = nearTermRange;
+  }
 
-    if (hasPremierDraftGames(colorRatings)) {
-      if (!fallbackUsed) {
-        return { range: searchRange, colorRatings, fallbackUsed };
+  if (deepSearch) {
+    for (;;) {
+      const previousChunk = getPreviousDateRange(searchRange);
+      if (parseDate(previousChunk.endDate) <= walkFloor) break;
+      if (checkedWindows >= maxChunks) break;
+
+      searchRange = previousChunk;
+      checkedWindows += 1;
+      if (checkedWindows % 3 === 0) {
+        onProgress?.(
+          `Searching older Premier Draft data near ${searchRange.endDate}...`
+        );
       }
 
-      const expandedRange = expandRangeEarlier(searchRange, 28);
-      const expandedColorRatings = await fetchColorRatings({
-        setCode,
-        startDate: expandedRange.startDate,
-        endDate: expandedRange.endDate,
-      });
-
-      return {
-        range: expandedRange,
-        colorRatings: expandedColorRatings,
-        fallbackUsed,
-      };
-    }
-
-    const previousChunk = getPreviousDateRange(searchRange);
-    if (parseDate(previousChunk.endDate) <= setStartDate) {
-      if (isCubeLikeExpansion(setCode)) {
-        onProgress?.(`Searching older Premier Draft data for ${setCode}...`);
-        const wideRange = {
-          startDate: CUBE_HISTORY_START,
-          endDate: preferredRange.endDate,
-        };
-        const wideColorRatings = await fetchColorRatings({
-          setCode,
-          startDate: wideRange.startDate,
-          endDate: wideRange.endDate,
-        });
-        if (hasPremierDraftGames(wideColorRatings)) {
-          return {
-            range: wideRange,
-            colorRatings: wideColorRatings,
-            fallbackUsed: true,
-          };
-        }
+      const chunkRatings = await fetchColorRatingsForRange(setCode, searchRange);
+      if (hasPremierDraftGames(chunkRatings)) {
+        return expandFoundFallback(setCode, searchRange, chunkRatings, walkFloor);
       }
-      return { range: preferredRange, colorRatings, fallbackUsed: false };
-    }
-
-    fallbackUsed = true;
-    searchRange = previousChunk;
-
-    if (checkedWindows % 3 === 0) {
-      onProgress?.(`Searching older Premier Draft data near ${searchRange.endDate}...`);
+      lastEmptyRatings = chunkRatings;
     }
   }
+
+  const wideRange = {
+    startDate: cubeLike ? CUBE_HISTORY_START : formatDate(walkFloor),
+    endDate: preferredRange.endDate,
+  };
+  if (!rangesEqual(wideRange, preferredRange) && !rangesEqual(wideRange, searchRange)) {
+    onProgress?.(
+      cubeLike
+        ? `Searching older Premier Draft data for ${setCode}...`
+        : `Searching Premier Draft data back to ${wideRange.startDate}...`
+    );
+    const wideColorRatings = await fetchColorRatingsForRange(setCode, wideRange);
+    if (hasPremierDraftGames(wideColorRatings)) {
+      return {
+        range: wideRange,
+        colorRatings: wideColorRatings,
+        fallbackUsed: true,
+      };
+    }
+    lastEmptyRatings = wideColorRatings;
+  }
+
+  return { range: preferredRange, colorRatings: lastEmptyRatings, fallbackUsed: false };
 }
 
 function countMatchedCards(cards, cardData) {
@@ -713,7 +797,9 @@ async function discoverUsableCubeExpansions(preferredRange, onProgress) {
   onProgress?.("Checking 17Lands cube sources...");
   const found = await Promise.all(
     candidates.map(async (expansion) => {
-      const result = await findMostRecentAvailableRange(expansion, preferredRange);
+      const result = await findMostRecentAvailableRange(expansion, preferredRange, null, {
+        deepSearch: false,
+      });
       return hasPremierDraftGames(result.colorRatings) ? expansion : null;
     })
   );
@@ -858,14 +944,19 @@ function renderResults({
     expansion.name,
     expansion.code ? `(${expansion.code})` : ""
   );
-  const pairWinRate = formatColorRatingWinRate(colorRow);
+  const pairWinRate = formatColorRatingWinRate(colorRow, { fallbackUsed });
   setPrimaryWithNote(elements.pairWinRate, pairWinRate.primary, pairWinRate.note);
-  const formatWinRate = formatColorRatingWinRate(allDecksRow);
+  const formatWinRate = formatColorRatingWinRate(allDecksRow, { fallbackUsed });
   setPrimaryWithNote(elements.formatWinRate, formatWinRate.primary, formatWinRate.note);
   elements.meanGih.textContent = formatPercent(cardStats.mean);
-  elements.dateRange.textContent = `${range.startDate} to ${range.endDate}${
-    fallbackUsed ? " (most recent available)" : ""
-  }`;
+  elements.dateRange.textContent = fallbackUsed
+    ? `${range.startDate} to ${range.endDate} (most recent available · fallback search)`
+    : `${range.startDate} to ${range.endDate}`;
+  if (elements.dataWindow) {
+    elements.dataWindow.textContent = fallbackUsed
+      ? "Older Premier Draft window (fallback search)"
+      : "Last two weeks";
+  }
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
   if (sideboardCopies > 0) {
@@ -989,16 +1080,19 @@ async function rankExport() {
     const cubeNote = usedCubeSource
       ? ` Using 17Lands cube source: ${setCode}.`
       : "";
+    const fallbackNote = fallbackUsed
+      ? " Using the most recent available Premier Draft window after a fallback search."
+      : "";
     if (usedCubeSource && colorRow && colorRow.games > 0 && cardStats.mean === null) {
       showStatus(
-        `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this cube window.${sideboardNote}`
+        `Done.${cubeNote}${fallbackNote} Color-pair data is available; card games in hand win rate is not published for this cube window.${sideboardNote}`
       );
     } else if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
       showStatus(
-        `Done.${cubeNote} 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
+        `Done.${cubeNote}${fallbackNote} 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
       );
     } else {
-      showStatus(`Done.${cubeNote}${sideboardNote}`);
+      showStatus(`Done.${cubeNote}${fallbackNote}${sideboardNote}`);
     }
   } catch (error) {
     showStatus(error.message, true);
