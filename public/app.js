@@ -1083,9 +1083,10 @@ async function rankExport() {
     const fallbackNote = fallbackUsed
       ? " Using the most recent available Premier Draft window after a fallback search."
       : "";
-    if (usedCubeSource && colorRow && colorRow.games > 0 && cardStats.mean === null) {
+    if (colorRow && colorRow.games > 0 && cardStats.mean === null) {
+      const gihScope = usedCubeSource ? "cube window" : "window";
       showStatus(
-        `Done.${cubeNote}${fallbackNote} Color-pair data is available; card games in hand win rate is not published for this cube window.${sideboardNote}`
+        `Done.${cubeNote}${fallbackNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${sideboardNote}`
       );
     } else if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
       showStatus(
