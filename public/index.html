@@ -19,8 +19,9 @@
         </div>
         <p class="source-note">
           Paste an MTG Arena deck export. Results use public 17Lands data for
-          Premier Draft. Multi-set cube exports are ranked against 17Lands cube
-          sources.
+          Premier Draft. Multi-set pastes can use a 17Lands cube source or
+          <strong>Not a Cube</strong>, which ranks each card with Premier Draft
+          GIH from that card’s own set.
         </p>
       </section>
 
@@ -75,7 +76,7 @@
         <section class="window-controls" aria-labelledby="window-controls-title">
           <div class="window-controls-copy">
             <h2 id="window-controls-title">Date range</h2>
-            <p class="window-controls-note">
+            <p id="window-controls-note" class="window-controls-note">
               Move the slider to start later. The end date stays at today.
               Pair and All Decks win rates use these dates. Card games in
               hand uses the closest 17Lands published window.
@@ -182,6 +183,6 @@
       </tr>
     </template>
 
-    <script src="app.js?v=17" defer></script>
+    <script src="app.js?v=18" defer></script>
   </body>
 </html>

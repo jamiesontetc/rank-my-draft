@@ -75,7 +75,9 @@ const KNOWN_CUBE_EXPANSIONS = [
   "Remix - Artifacts",
 ];
 
-const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
+const CUBE_SOURCE_PLACEHOLDER = "Select a source…";
+const NOT_A_CUBE_VALUE = "not-a-cube";
+const NOT_A_CUBE_LABEL = "Not a Cube";
 const CUBE_HISTORY_START = "2020-01-01";
 
 const SET_NAMES = {
@@ -169,6 +171,7 @@ const elements = {
   windowStartSlider: document.querySelector("#window-start-slider"),
   windowRangeLabel: document.querySelector("#window-range-label"),
   windowFloorLabel: document.querySelector("#window-floor-label"),
+  windowControlsNote: document.querySelector("#window-controls-note"),
   rerankButton: document.querySelector("#rerank-button"),
 };
 
@@ -290,7 +293,7 @@ function collectCodedSetCounts(cards) {
 function isLikelyCubeExport(cards) {
   const { setCounts, codedCopies } = collectCodedSetCounts(cards);
   const distinctSets = setCounts.size;
-  if (codedCopies === 0 || distinctSets < 3) return false;
+  if (codedCopies === 0 || distinctSets < 2) return false;
   if (distinctSets >= 4) return true;
 
   const topShare = Math.max(...setCounts.values()) / codedCopies;
@@ -320,7 +323,32 @@ function sortCubeExpansions(expansions) {
 
 function selectedCubeExpansion(available) {
   const value = elements.cubeSource.value;
+  if (value === NOT_A_CUBE_VALUE) return value;
   return available.includes(value) ? value : "";
+}
+
+function collectDistinctSetCodes(cardLists) {
+  const codes = new Set();
+  for (const cards of cardLists) {
+    for (const card of cards) {
+      if (!card.setCode || isBasicLand(card)) continue;
+      codes.add(card.setCode);
+    }
+  }
+  return [...codes].sort();
+}
+
+function getPerSetFloorDate(filters, setCodes) {
+  let earliest = null;
+  for (const setCode of setCodes) {
+    const floor = getSearchFloorDate(filters, setCode);
+    if (!earliest || floor < earliest) earliest = floor;
+  }
+  return earliest ?? parseDate(CUBE_HISTORY_START);
+}
+
+function formatPerSetSource(source, setCode) {
+  return setCode ? `${source} · ${setCode}` : source;
 }
 
 function expansionDisplayParts(setCode) {
@@ -428,7 +456,7 @@ function mergeCardsByName(cards) {
   return [...byName.values()];
 }
 
-function selectCardGih(card, colorByName, allByName, useColorPair = true) {
+function selectCardGih(card, colorByName, allByName, useColorPair = true, options = {}) {
   const key = normalizeName(card.name);
   const colorRow = colorByName.get(key);
   const allRow = allByName.get(key);
@@ -437,12 +465,22 @@ function selectCardGih(card, colorByName, allByName, useColorPair = true) {
       ? colorRow
       : allRow;
   const gihWr = selected?.ever_drawn_win_rate;
+  const source = selected === colorRow ? "Color pair" : "All decks";
   return {
     quantity: card.quantity,
-    name: card.name,
-    source: selected === colorRow ? "Color pair" : "All decks",
+    name: options.includeSet && card.setCode ? `${card.name} (${card.setCode})` : card.name,
+    source: options.includeSet ? formatPerSetSource(source, card.setCode) : source,
     games: selected?.ever_drawn_game_count ?? null,
     gihWr: typeof gihWr === "number" ? gihWr : null,
+  };
+}
+
+function cardMapsForSet(card, colorBySet, allBySet) {
+  const empty = new Map();
+  if (!card.setCode) return { colorByName: empty, allByName: empty };
+  return {
+    colorByName: colorBySet.get(card.setCode) ?? empty,
+    allByName: allBySet.get(card.setCode) ?? empty,
   };
 }
 
@@ -496,6 +534,35 @@ async function fetchCardData({ setCode, timePeriod, colors }) {
       })
     )
   );
+}
+
+async function fetchCardDataSafe(params) {
+  try {
+    return await fetchCardData(params);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchCardDataMapsBySet({ setCodes, timePeriod, colors }) {
+  const bySet = new Map();
+  await Promise.all(
+    setCodes.map(async (setCode) => {
+      const cardData = await fetchCardDataSafe({ setCode, timePeriod, colors });
+      bySet.set(setCode, buildCardDataMap(cardData));
+    })
+  );
+  return bySet;
+}
+
+function mergeCardDataMapsForCards(cards, dataBySet) {
+  const merged = new Map();
+  for (const card of cards) {
+    if (!card.setCode) continue;
+    const apiCard = dataBySet.get(card.setCode)?.get(normalizeName(card.name));
+    if (apiCard) merged.set(normalizeName(card.name), apiCard);
+  }
+  return merged;
 }
 
 // 17Lands card_data only accepts discrete time_period enums. Custom
@@ -584,7 +651,11 @@ async function fetchColorRatings({ setCode, startDate, endDate }) {
   );
 }
 
-function calculateMeanGih(cards, colorCardData, allCardData) {
+function isAllDecksSource(source) {
+  return source === "All decks" || source.startsWith("All decks · ");
+}
+
+function calculateMeanGih(cards, colorCardData, allCardData, options = {}) {
   const colorByName = buildCardDataMap(colorCardData);
   const allByName = buildCardDataMap(allCardData);
   const rows = [];
@@ -592,7 +663,7 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
   let countedCopies = 0;
 
   for (const card of cards.filter((item) => !isBasicLand(item))) {
-    const row = selectCardGih(card, colorByName, allByName, true);
+    const row = selectCardGih(card, colorByName, allByName, true, options);
     if (typeof row.gihWr === "number") {
       weightedTotal += row.gihWr * card.quantity;
       countedCopies += card.quantity;
@@ -604,7 +675,30 @@ function calculateMeanGih(cards, colorCardData, allCardData) {
     rows,
     mean: countedCopies > 0 ? weightedTotal / countedCopies : null,
     countedCopies,
-    fallbackCount: rows.filter((row) => row.source === "All decks").length,
+    fallbackCount: rows.filter((row) => isAllDecksSource(row.source)).length,
+  };
+}
+
+function calculateMeanGihFromSetMaps(cards, colorBySet, allBySet) {
+  const rows = [];
+  let weightedTotal = 0;
+  let countedCopies = 0;
+
+  for (const card of cards.filter((item) => !isBasicLand(item))) {
+    const { colorByName, allByName } = cardMapsForSet(card, colorBySet, allBySet);
+    const row = selectCardGih(card, colorByName, allByName, true, { includeSet: true });
+    if (typeof row.gihWr === "number") {
+      weightedTotal += row.gihWr * card.quantity;
+      countedCopies += card.quantity;
+    }
+    rows.push(row);
+  }
+
+  return {
+    rows,
+    mean: countedCopies > 0 ? weightedTotal / countedCopies : null,
+    countedCopies,
+    fallbackCount: rows.filter((row) => isAllDecksSource(row.source)).length,
   };
 }
 
@@ -612,9 +706,25 @@ function compareGihRows(a, b) {
   return b.gihWr - a.gihWr || a.name.localeCompare(b.name);
 }
 
-function rankSideboardPicks(sideboardCards, colorCode, colorCardData, allCardData) {
+function rankSideboardPicks(sideboardCards, colorCode, colorCardData, allCardData, options = {}) {
   const colorByName = buildCardDataMap(colorCardData);
   const allByName = buildCardDataMap(allCardData);
+  return rankSideboardPicksFromMaps(
+    sideboardCards,
+    colorCode,
+    colorByName,
+    allByName,
+    options
+  );
+}
+
+function rankSideboardPicksFromMaps(
+  sideboardCards,
+  colorCode,
+  colorByName,
+  allByName,
+  options = {}
+) {
   const uniqueCards = mergeCardsByName(
     sideboardCards.filter((card) => !isBasicLand(card))
   );
@@ -623,10 +733,39 @@ function rankSideboardPicks(sideboardCards, colorCode, colorCardData, allCardDat
 
   for (const card of uniqueCards) {
     if (cardFitsColorCode(card, colorCode, allByName)) {
-      const row = selectCardGih(card, colorByName, allByName, true);
+      const row = selectCardGih(card, colorByName, allByName, true, options);
       if (typeof row.gihWr === "number") onColor.push(row);
     } else {
-      const row = selectCardGih(card, colorByName, allByName, false);
+      const row = selectCardGih(card, colorByName, allByName, false, options);
+      if (typeof row.gihWr === "number") offColor.push(row);
+    }
+  }
+
+  onColor.sort(compareGihRows);
+  offColor.sort(compareGihRows);
+
+  return {
+    onColor: onColor.slice(0, 2),
+    offColor: offColor.slice(0, 2),
+    rankableCount: onColor.length + offColor.length,
+  };
+}
+
+function rankSideboardPicksFromSetMaps(sideboardCards, colorCode, colorBySet, allBySet) {
+  const uniqueCards = mergeCardsByName(
+    sideboardCards.filter((card) => !isBasicLand(card))
+  );
+  const onColor = [];
+  const offColor = [];
+  const mergedAllByName = mergeCardDataMapsForCards(uniqueCards, allBySet);
+
+  for (const card of uniqueCards) {
+    const { colorByName, allByName } = cardMapsForSet(card, colorBySet, allBySet);
+    if (cardFitsColorCode(card, colorCode, mergedAllByName)) {
+      const row = selectCardGih(card, colorByName, allByName, true, { includeSet: true });
+      if (typeof row.gihWr === "number") onColor.push(row);
+    } else {
+      const row = selectCardGih(card, colorByName, allByName, false, { includeSet: true });
       if (typeof row.gihWr === "number") offColor.push(row);
     }
   }
@@ -680,14 +819,19 @@ function getSearchFloorDate(filters, setCode) {
   return getSetStartDate(filters, setCode);
 }
 
-function getDefaultRankRange(filters, setCode, endDate = todayDateString()) {
-  const floor = formatDate(getSearchFloorDate(filters, setCode));
+function getDefaultRankRangeFromFloor(floorDate, endDate = todayDateString()) {
+  const floor = typeof floorDate === "string" ? floorDate : formatDate(floorDate);
   const startDate = parseDate(floor) > parseDate(endDate) ? endDate : floor;
   return { startDate, endDate };
 }
 
-function describeDataWindow(range, floorDate, setCode) {
+function getDefaultRankRange(filters, setCode, endDate = todayDateString()) {
+  return getDefaultRankRangeFromFloor(getSearchFloorDate(filters, setCode), endDate);
+}
+
+function describeDataWindow(range, floorDate, setCode, { perSet = false } = {}) {
   if (range.startDate === floorDate) {
+    if (perSet) return "Since earliest set release";
     return isCubeLikeExpansion(setCode)
       ? "Since cube history start"
       : "Since set release";
@@ -811,14 +955,29 @@ function populateCubeDropdown(available, selected) {
   placeholder.value = "";
   placeholder.textContent = CUBE_SOURCE_PLACEHOLDER;
   elements.cubeSource.append(placeholder);
-  for (const expansion of available) {
-    const option = document.createElement("option");
-    option.value = expansion;
-    option.textContent = expansion;
-    elements.cubeSource.append(option);
+
+  const notACubeGroup = document.createElement("optgroup");
+  notACubeGroup.label = "Multi-set Premier Draft";
+  const notACube = document.createElement("option");
+  notACube.value = NOT_A_CUBE_VALUE;
+  notACube.textContent = `${NOT_A_CUBE_LABEL} — GIH by card set`;
+  notACubeGroup.append(notACube);
+  elements.cubeSource.append(notACubeGroup);
+
+  if (available.length > 0) {
+    const cubeGroup = document.createElement("optgroup");
+    cubeGroup.label = "17Lands cube sources";
+    for (const expansion of available) {
+      const option = document.createElement("option");
+      option.value = expansion;
+      option.textContent = expansion;
+      cubeGroup.append(option);
+    }
+    elements.cubeSource.append(cubeGroup);
   }
-  elements.cubeSource.value =
-    selected && available.includes(selected) ? selected : "";
+
+  const allowed = [NOT_A_CUBE_VALUE, ...available];
+  elements.cubeSource.value = selected && allowed.includes(selected) ? selected : "";
 }
 
 function clearTable() {
@@ -934,16 +1093,40 @@ function updateWindowRangeLabel() {
   );
 }
 
-function syncWindowControls({ floorDate, endDate, startDate, setCode }) {
+function defaultWindowControlsNote() {
+  return (
+    "Move the slider to start later. The end date stays at today. " +
+    "Pair and All Decks win rates use these dates. Card games in " +
+    "hand uses the closest 17Lands published window."
+  );
+}
+
+function perSetWindowControlsNote() {
+  return (
+    "Move the slider to start later. The end date stays at today. " +
+    "Pair and All Decks win rates stay N/A — there is no single expansion. " +
+    "Card games in hand uses the closest 17Lands published window, " +
+    "fetched from each card’s own set."
+  );
+}
+
+function syncWindowControls({ floorDate, endDate, startDate, setCode, usedPerSetGih = false }) {
   const maxDays = Math.max(0, utcDayCount(floorDate, endDate));
   const value = Math.min(maxDays, Math.max(0, utcDayCount(floorDate, startDate)));
   elements.windowStartSlider.min = "0";
   elements.windowStartSlider.max = String(maxDays);
   elements.windowStartSlider.value = String(value);
   elements.windowStartSlider.disabled = rankInProgress || maxDays === 0;
-  elements.windowFloorLabel.textContent = isCubeLikeExpansion(setCode)
-    ? "Cube history"
-    : "Set release";
+  elements.windowFloorLabel.textContent = usedPerSetGih
+    ? "Earliest set"
+    : isCubeLikeExpansion(setCode)
+      ? "Cube history"
+      : "Set release";
+  if (elements.windowControlsNote) {
+    elements.windowControlsNote.textContent = usedPerSetGih
+      ? perSetWindowControlsNote()
+      : defaultWindowControlsNote();
+  }
   updateWindowRangeLabel();
 }
 
@@ -958,22 +1141,37 @@ function renderResults({
   cardPeriod,
   sideboardCopies = 0,
   sideboardPicks = null,
+  usedPerSetGih = false,
+  setCodes = [],
 }) {
   elements.colorPair.textContent = describeColorCode(colorCode);
-  const expansion = expansionDisplayParts(setCode);
-  setPrimaryWithNote(
-    elements.setName,
-    expansion.name,
-    expansion.code ? `(${expansion.code})` : ""
-  );
-  const pairWinRate = formatColorRatingWinRate(colorRow);
-  setPrimaryWithNote(elements.pairWinRate, pairWinRate.primary, pairWinRate.note);
-  const formatWinRate = formatColorRatingWinRate(allDecksRow);
-  setPrimaryWithNote(elements.formatWinRate, formatWinRate.primary, formatWinRate.note);
+  if (usedPerSetGih) {
+    const codes = setCodes.join(", ");
+    setPrimaryWithNote(
+      elements.setName,
+      "Multi-set",
+      codes ? `(${codes})` : ""
+    );
+    setPrimaryWithNote(elements.pairWinRate, "N/A", "no single expansion");
+    setPrimaryWithNote(elements.formatWinRate, "N/A", "no single expansion");
+  } else {
+    const expansion = expansionDisplayParts(setCode);
+    setPrimaryWithNote(
+      elements.setName,
+      expansion.name,
+      expansion.code ? `(${expansion.code})` : ""
+    );
+    const pairWinRate = formatColorRatingWinRate(colorRow);
+    setPrimaryWithNote(elements.pairWinRate, pairWinRate.primary, pairWinRate.note);
+    const formatWinRate = formatColorRatingWinRate(allDecksRow);
+    setPrimaryWithNote(elements.formatWinRate, formatWinRate.primary, formatWinRate.note);
+  }
   elements.meanGih.textContent = formatPercent(cardStats.mean);
   elements.dateRange.textContent = `${range.startDate} to ${range.endDate}`;
   if (elements.dataWindow) {
-    elements.dataWindow.textContent = describeDataWindow(range, floorDate, setCode);
+    elements.dataWindow.textContent = describeDataWindow(range, floorDate, setCode, {
+      perSet: usedPerSetGih,
+    });
   }
   if (elements.cardWindow) {
     elements.cardWindow.textContent = describeCardGihWindow(cardPeriod);
@@ -996,30 +1194,147 @@ function showRankCompleteStatus({
   colorRow,
   cardStats,
   usedCubeSource,
+  usedPerSetGih,
   setCode,
   sideboardCopies,
   cardPeriod,
 }) {
   const sideboardNote = formatSideboardNote(sideboardCopies);
-  const cubeNote = usedCubeSource ? ` Using 17Lands cube source: ${setCode}.` : "";
+  const sourceNote = usedPerSetGih
+    ? " Using Premier Draft GIH from each card’s own set, not a cube source and not a single format win rate."
+    : usedCubeSource
+      ? ` Using 17Lands cube source: ${setCode}.`
+      : "";
   const gihNote =
     cardPeriod && !cardPeriod.exact
       ? ` Card GIH uses 17Lands ${cardPeriod.label}, the closest published window to the selected dates.`
       : "";
+  if (usedPerSetGih) {
+    if (cardStats.mean === null) {
+      showStatus(
+        `Done.${sourceNote} Card games in hand win rate is not published for this window.${gihNote}${sideboardNote}`
+      );
+      return;
+    }
+    showStatus(`Done.${sourceNote}${gihNote}${sideboardNote}`);
+    return;
+  }
   if (colorRow && colorRow.games > 0 && cardStats.mean === null) {
     const gihScope = usedCubeSource ? "cube window" : "window";
     showStatus(
-      `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${gihNote}${sideboardNote}`
+      `Done.${sourceNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${gihNote}${sideboardNote}`
     );
     return;
   }
   if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
     showStatus(
-      `Done.${cubeNote} 17Lands has little or no Premier Draft data for this date range.${gihNote}${sideboardNote}`
+      `Done.${sourceNote} 17Lands has little or no Premier Draft data for this date range.${gihNote}${sideboardNote}`
     );
     return;
   }
-  showStatus(`Done.${cubeNote}${gihNote}${sideboardNote}`);
+  showStatus(`Done.${sourceNote}${gihNote}${sideboardNote}`);
+}
+
+async function applyPerSetRanking({ parsed, range, colorCode: existingColorCode }) {
+  const filters = await fetchFilters();
+  const setCodes = collectDistinctSetCodes([parsed.cards, parsed.sideboardCards]);
+  if (setCodes.length === 0) {
+    throw new Error(
+      "Not a Cube needs Arena set codes on each card, like 1 Card Name (SOS) 123."
+    );
+  }
+
+  const floorDate = formatDate(getPerSetFloorDate(filters, setCodes));
+  const clampedRange = clampRangeStart(range, floorDate);
+  const cardPeriod = selectCardDataPeriod(clampedRange, floorDate);
+  const setLabel = setCodes.join(", ");
+
+  showStatus(`Fetching Premier Draft GIH by card set (${setLabel})...`);
+  const colorFromLands = existingColorCode ?? inferColorCodeFromLands(parsed.cards);
+
+  let allBySet;
+  let colorBySet;
+  let colorCode = colorFromLands;
+
+  if (colorCode) {
+    [allBySet, colorBySet] = await Promise.all([
+      fetchCardDataMapsBySet({ setCodes, timePeriod: cardPeriod.id }),
+      fetchCardDataMapsBySet({
+        setCodes,
+        timePeriod: cardPeriod.id,
+        colors: colorCode,
+      }),
+    ]);
+  } else {
+    allBySet = await fetchCardDataMapsBySet({
+      setCodes,
+      timePeriod: cardPeriod.id,
+    });
+    const mergedAllByName = mergeCardDataMapsForCards(
+      [...parsed.cards, ...parsed.sideboardCards],
+      allBySet
+    );
+    colorCode = inferColorCodeFromCards(parsed.cards, mergedAllByName);
+    if (!colorCode) {
+      throw new Error("Could not infer a deck color pair from the export.");
+    }
+    colorBySet = await fetchCardDataMapsBySet({
+      setCodes,
+      timePeriod: cardPeriod.id,
+      colors: colorCode,
+    });
+  }
+
+  const cardStats = calculateMeanGihFromSetMaps(parsed.cards, colorBySet, allBySet);
+  const sideboardPicks = rankSideboardPicksFromSetMaps(
+    parsed.sideboardCards,
+    colorCode,
+    colorBySet,
+    allBySet
+  );
+
+  lastRankSession = {
+    parsed,
+    setCode: "Multi-set",
+    colorCode,
+    usedCubeSource: false,
+    usedPerSetGih: true,
+    floorDate,
+    endDate: clampedRange.endDate,
+  };
+
+  syncWindowControls({
+    floorDate,
+    endDate: clampedRange.endDate,
+    startDate: clampedRange.startDate,
+    setCode: "Multi-set",
+    usedPerSetGih: true,
+  });
+
+  renderResults({
+    setCode: "Multi-set",
+    colorCode,
+    colorRow: null,
+    allDecksRow: null,
+    range: clampedRange,
+    cardStats,
+    floorDate,
+    cardPeriod,
+    sideboardCopies: parsed.sideboardCopies,
+    sideboardPicks,
+    usedPerSetGih: true,
+    setCodes,
+  });
+
+  showRankCompleteStatus({
+    colorRow: null,
+    cardStats,
+    usedCubeSource: false,
+    usedPerSetGih: true,
+    setCode: "Multi-set",
+    sideboardCopies: parsed.sideboardCopies,
+    cardPeriod,
+  });
 }
 
 async function applyRanking({
@@ -1027,8 +1342,14 @@ async function applyRanking({
   setCode,
   range,
   usedCubeSource,
+  usedPerSetGih = false,
   colorCode: existingColorCode,
 }) {
+  if (usedPerSetGih) {
+    await applyPerSetRanking({ parsed, range, colorCode: existingColorCode });
+    return;
+  }
+
   const filters = await fetchFilters();
   const floorDate = formatDate(getSearchFloorDate(filters, setCode));
   const clampedRange = clampRangeStart(range, floorDate);
@@ -1077,6 +1398,7 @@ async function applyRanking({
     setCode,
     colorCode,
     usedCubeSource,
+    usedPerSetGih: false,
     floorDate,
     endDate: clampedRange.endDate,
   };
@@ -1105,6 +1427,7 @@ async function applyRanking({
     colorRow,
     cardStats,
     usedCubeSource,
+    usedPerSetGih: false,
     setCode,
     sideboardCopies: parsed.sideboardCopies,
     cardPeriod,
@@ -1130,26 +1453,34 @@ async function rankExport() {
       Boolean(elements.forceCube.checked) || isLikelyCubeExport(parsed.cards);
     let setCode = parsed.setCode;
     let usedCubeSource = false;
+    let usedPerSetGih = false;
 
     showStatus("Fetching 17Lands data...");
     if (likelyCube) {
-      const availableCubes = await listUsableCubeExpansions(showStatus);
+      let availableCubes = [];
+      try {
+        availableCubes = await listUsableCubeExpansions(showStatus);
+      } catch {
+        availableCubes = [];
+      }
       const selectedCube = selectedCubeExpansion(availableCubes);
       populateCubeDropdown(availableCubes, selectedCube);
       showCubeSourceRow(true);
 
-      if (availableCubes.length === 0) {
-        throw new Error(
-          "Detected a cube export, but no 17Lands cube sources have Premier Draft data."
-        );
-      }
       if (!selectedCube) {
-        showStatus("Select a cube from Cube / 17Lands source to rank this export.");
+        showStatus(
+          "Select Not a Cube to rank each card by its own set’s Premier Draft GIH, or choose a 17Lands cube source."
+        );
         return;
       }
 
-      setCode = selectedCube;
-      usedCubeSource = true;
+      if (selectedCube === NOT_A_CUBE_VALUE) {
+        usedPerSetGih = true;
+        setCode = "Multi-set";
+      } else {
+        setCode = selectedCube;
+        usedCubeSource = true;
+      }
     } else {
       showCubeSourceRow(false);
       if (!setCode) {
@@ -1159,8 +1490,15 @@ async function rankExport() {
       }
     }
 
-    const range = getDefaultRankRange(filters, setCode);
-    await applyRanking({ parsed, setCode, range, usedCubeSource });
+    const range = usedPerSetGih
+      ? getDefaultRankRangeFromFloor(
+          getPerSetFloorDate(
+            filters,
+            collectDistinctSetCodes([parsed.cards, parsed.sideboardCards])
+          )
+        )
+      : getDefaultRankRange(filters, setCode);
+    await applyRanking({ parsed, setCode, range, usedCubeSource, usedPerSetGih });
   } catch (error) {
     showStatus(error.message, true);
   } finally {
@@ -1183,6 +1521,7 @@ async function rerankExport() {
       setCode: lastRankSession.setCode,
       range,
       usedCubeSource: lastRankSession.usedCubeSource,
+      usedPerSetGih: lastRankSession.usedPerSetGih,
       colorCode: lastRankSession.colorCode,
     });
   } catch (error) {

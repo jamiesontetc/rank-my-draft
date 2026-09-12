@@ -31,15 +31,24 @@ GIH WR for that card.
 Exports without set codes are supported. In that case, the app infers the set
 from card names using 17Lands card data.
 
-Multi-set Arena cube exports (many different `(SET)` codes in the main deck)
-are detected as cubes. Ranking then uses 17Lands cube expansions such as
-`Cube - Planar`, `Cube - Powered`, `Cube`, `Chaos`, and `Remix - Artifacts`
-instead of a single premier-draft set code. A **Cube / 17Lands source**
-dropdown lists cube expansions that have Premier Draft data for the current
-format. Choose a source from the list to rank; nothing is selected
-automatically. Check **This is a cube** to force cube mode when the paste
-is mixed but does not trip the heuristic. Single-set Premier Draft pastes
-are unchanged.
+Multi-set Arena exports (different `(SET)` codes in the main deck) open a
+**Cube / 17Lands source** dropdown. Choose a 17Lands cube expansion such as
+`Cube - Planar`, `Cube - Powered`, `Cube`, `Chaos`, or `Remix - Artifacts`
+to rank against that cube. Or choose **Not a Cube** for a 2–3 set draft or
+sealed that is not a cube: each non-basic card is ranked with Premier Draft
+GIH from **that card’s own set** (`/api/card_data`, `event_type=PremierDraft`,
+same `time_period` snapping as a single-set rank). Mean GIH, the card table,
+and Sideboard Considerations use those per-set values. Pair win rate and All
+Decks WR are **N/A** because there is no single expansion for color ratings.
+Deck colors are still inferred from lands and card colors so on-color vs
+off-color sideboard picks and color-pair vs all-decks GIH still work within
+each set. If one set has no data for the chosen window, those cards show
+unpublished (`-`) and the rest of the rank continues.
+
+Nothing is selected automatically. Check **This is a cube** to show the
+dropdown when the paste is mixed but does not trip the multi-set heuristic
+— you do not need to uncheck it to use **Not a Cube**. Single-set Premier
+Draft pastes and real cube-source ranking are unchanged.
 
 The first **Rank It** query uses Premier Draft data from the expansion’s
 `start_date` in 17Lands `/data/filters` through today. Cube expansions ignore
@@ -49,15 +58,19 @@ history), not last-day data.
 
 After results appear, a date-range slider moves the window start from that
 floor toward today (end date stays today). **Re-rank** fetches the same
-export, set or cube source, and colors again for the selected range. Pair and
-All Decks win rates follow the exact slider dates via `/color_ratings/data`.
-Card GIH (mean, table, and Sideboard Considerations) comes from
-`/api/card_data`, which only accepts discrete `time_period` presets (`ALL_TIME`,
-`ALL_EXCEPT_FIRST_WEEK`, `LAST_TWO_WEEKS`, `LAST_WEEK`, `LAST_DAY`). The app
-picks the closest preset to the selected start→today window and labels that
-**Card GIH Window** in Query. If the chosen color-ratings window has no
-Premier Draft games, the app shows a status error instead of blank win-rate
-tiles.
+export, set or cube source (or Not a Cube per-set path), and colors again for
+the selected range. Pair and All Decks win rates follow the exact slider
+dates via `/color_ratings/data` for a single expansion or cube. For **Not a
+Cube** they stay N/A. Card GIH (mean, table, and Sideboard Considerations)
+comes from `/api/card_data`, which only accepts discrete `time_period`
+presets (`ALL_TIME`, `ALL_EXCEPT_FIRST_WEEK`, `LAST_TWO_WEEKS`, `LAST_WEEK`,
+`LAST_DAY`). The app picks the closest preset to the selected start→today
+window and labels that **Card GIH Window** in Query. Not a Cube applies that
+same preset to each distinct set in the export (one fetch per set, not per
+card). If the chosen color-ratings window has no Premier Draft games, the
+app shows a status error instead of blank win-rate tiles. Not a Cube does
+not query color ratings, so a missing window on one set does not fail the
+rank.
 
 ## Project Layout
 
