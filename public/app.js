@@ -77,7 +77,6 @@ const KNOWN_CUBE_EXPANSIONS = [
 
 const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
 const CUBE_HISTORY_START = "2020-01-01";
-const INFERENCE_LOOKBACK_DAYS = 14;
 
 const SET_NAMES = {
   HOB: "The Hobbit",
@@ -154,6 +153,7 @@ const elements = {
   meanGih: document.querySelector("#mean-gih"),
   dateRange: document.querySelector("#date-range"),
   dataWindow: document.querySelector("#data-window"),
+  cardWindow: document.querySelector("#card-window"),
   cardsCounted: document.querySelector("#cards-counted"),
   fallbackCount: document.querySelector("#fallback-count"),
   sideboardRow: document.querySelector("#sideboard-row"),
@@ -190,16 +190,6 @@ function todayDateString() {
 
 function utcDayCount(startDate, endDate) {
   return Math.round((parseDate(endDate) - parseDate(startDate)) / 86400000);
-}
-
-function getInferenceDateRange() {
-  const end = new Date();
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - INFERENCE_LOOKBACK_DAYS);
-  return {
-    startDate: formatDate(start),
-    endDate: formatDate(end),
-  };
 }
 
 function parseDate(dateString) {
@@ -489,16 +479,97 @@ async function fetchFilters() {
   return filtersPromise;
 }
 
-async function fetchCardRatings({ setCode, startDate, endDate, colors }) {
-  return fetchJson(
-    buildUrl("/card_ratings/data", {
-      expansion: setCode,
-      format: FORMAT,
-      start_date: startDate,
-      end_date: endDate,
-      colors,
-    })
+function unwrapCardData(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+async function fetchCardData({ setCode, timePeriod, colors }) {
+  return unwrapCardData(
+    await fetchJson(
+      buildUrl("/api/card_data", {
+        expansion: setCode,
+        event_type: FORMAT,
+        time_period: timePeriod,
+        colors,
+      })
+    )
   );
+}
+
+// 17Lands card_data only accepts discrete time_period enums. Custom
+// start_date/end_date are ignored (they fall back to All Time). The live
+// card_data UI uses the same presets, not a calendar range.
+const CARD_DATA_PERIODS = [
+  {
+    id: "ALL_TIME",
+    label: "All Time",
+    impliedStart({ floorDate }) {
+      return floorDate;
+    },
+  },
+  {
+    id: "ALL_EXCEPT_FIRST_WEEK",
+    label: "All Except First Week",
+    impliedStart({ floorDate }) {
+      return formatDate(addDays(parseDate(floorDate), 7));
+    },
+  },
+  {
+    id: "LAST_TWO_WEEKS",
+    label: "Last Two Weeks",
+    impliedStart({ endDate }) {
+      return formatDate(addDays(parseDate(endDate), -14));
+    },
+  },
+  {
+    id: "LAST_WEEK",
+    label: "Last Week",
+    impliedStart({ endDate }) {
+      return formatDate(addDays(parseDate(endDate), -7));
+    },
+  },
+  {
+    id: "LAST_DAY",
+    label: "Last Day",
+    impliedStart({ endDate }) {
+      return formatDate(addDays(parseDate(endDate), -1));
+    },
+  },
+];
+
+function selectCardDataPeriod(range, floorDate) {
+  if (range.startDate === floorDate) {
+    return { id: "ALL_TIME", label: "All Time", exact: true };
+  }
+
+  const floor = parseDate(floorDate);
+  const end = parseDate(range.endDate);
+  let best = null;
+
+  for (const period of CARD_DATA_PERIODS) {
+    const impliedStart = parseDate(
+      period.impliedStart({ floorDate, endDate: range.endDate })
+    );
+    if (period.id !== "ALL_TIME" && impliedStart < floor) continue;
+    if (impliedStart > end) continue;
+    const distance = Math.abs(
+      utcDayCount(formatDate(impliedStart), range.startDate)
+    );
+    if (!best || distance < best.distance) {
+      best = { id: period.id, label: period.label, distance };
+    }
+  }
+
+  return best
+    ? { id: best.id, label: best.label, exact: best.distance === 0 }
+    : { id: "ALL_TIME", label: "All Time", exact: false };
+}
+
+function describeCardGihWindow(cardPeriod) {
+  if (cardPeriod.exact) return cardPeriod.label;
+  return `${cardPeriod.label} (closest 17Lands window)`;
 }
 
 async function fetchColorRatings({ setCode, startDate, endDate }) {
@@ -662,7 +733,7 @@ function countMatchedCards(cards, cardData) {
   return matches;
 }
 
-async function inferSetFromCards(cards, range = getInferenceDateRange()) {
+async function inferSetFromCards(cards) {
   const filters = await fetchFilters();
   const expansions = filters.expansions ?? [];
   const uniqueNonBasics = new Set(
@@ -672,10 +743,9 @@ async function inferSetFromCards(cards, range = getInferenceDateRange()) {
   let bestMatch = null;
 
   for (const expansion of expansions) {
-    const cardData = await fetchCardRatings({
+    const cardData = await fetchCardData({
       setCode: expansion,
-      startDate: range.startDate,
-      endDate: range.endDate,
+      timePeriod: "ALL_TIME",
     });
     const matches = countMatchedCards(cards, cardData);
 
@@ -885,6 +955,7 @@ function renderResults({
   range,
   cardStats,
   floorDate,
+  cardPeriod,
   sideboardCopies = 0,
   sideboardPicks = null,
 }) {
@@ -903,6 +974,9 @@ function renderResults({
   elements.dateRange.textContent = `${range.startDate} to ${range.endDate}`;
   if (elements.dataWindow) {
     elements.dataWindow.textContent = describeDataWindow(range, floorDate, setCode);
+  }
+  if (elements.cardWindow) {
+    elements.cardWindow.textContent = describeCardGihWindow(cardPeriod);
   }
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
@@ -924,23 +998,28 @@ function showRankCompleteStatus({
   usedCubeSource,
   setCode,
   sideboardCopies,
+  cardPeriod,
 }) {
   const sideboardNote = formatSideboardNote(sideboardCopies);
   const cubeNote = usedCubeSource ? ` Using 17Lands cube source: ${setCode}.` : "";
+  const gihNote =
+    cardPeriod && !cardPeriod.exact
+      ? ` Card GIH uses 17Lands ${cardPeriod.label}, the closest published window to the selected dates.`
+      : "";
   if (colorRow && colorRow.games > 0 && cardStats.mean === null) {
     const gihScope = usedCubeSource ? "cube window" : "window";
     showStatus(
-      `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${sideboardNote}`
+      `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${gihNote}${sideboardNote}`
     );
     return;
   }
   if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
     showStatus(
-      `Done.${cubeNote} 17Lands has little or no Premier Draft data for this date range.${sideboardNote}`
+      `Done.${cubeNote} 17Lands has little or no Premier Draft data for this date range.${gihNote}${sideboardNote}`
     );
     return;
   }
-  showStatus(`Done.${cubeNote}${sideboardNote}`);
+  showStatus(`Done.${cubeNote}${gihNote}${sideboardNote}`);
 }
 
 async function applyRanking({
@@ -960,11 +1039,11 @@ async function applyRanking({
       : "Fetching Premier Draft data..."
   );
   const colorRatings = await fetchPremierDraftWindow(setCode, clampedRange);
+  const cardPeriod = selectCardDataPeriod(clampedRange, floorDate);
 
-  const allCardData = await fetchCardRatings({
+  const allCardData = await fetchCardData({
     setCode,
-    startDate: clampedRange.startDate,
-    endDate: clampedRange.endDate,
+    timePeriod: cardPeriod.id,
   });
 
   const allCardDataByName = buildCardDataMap(allCardData);
@@ -977,10 +1056,9 @@ async function applyRanking({
     throw new Error("Could not infer a deck color pair from the export.");
   }
 
-  const colorCardData = await fetchCardRatings({
+  const colorCardData = await fetchCardData({
     setCode,
-    startDate: clampedRange.startDate,
-    endDate: clampedRange.endDate,
+    timePeriod: cardPeriod.id,
     colors: colorCode,
   });
 
@@ -1018,6 +1096,7 @@ async function applyRanking({
     range: clampedRange,
     cardStats,
     floorDate,
+    cardPeriod,
     sideboardCopies: parsed.sideboardCopies,
     sideboardPicks,
   });
@@ -1028,6 +1107,7 @@ async function applyRanking({
     usedCubeSource,
     setCode,
     sideboardCopies: parsed.sideboardCopies,
+    cardPeriod,
   });
 }
 
