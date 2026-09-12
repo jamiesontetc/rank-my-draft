@@ -72,6 +72,35 @@
           </article>
         </div>
 
+        <section class="window-controls" aria-labelledby="window-controls-title">
+          <div class="window-controls-copy">
+            <h2 id="window-controls-title">Date range</h2>
+            <p class="window-controls-note">
+              Move the slider to start later. The end date stays at today.
+            </p>
+            <p id="window-range-label" class="window-range-dates">-</p>
+          </div>
+          <div class="window-slider-block">
+            <label class="visually-hidden" for="window-start-slider">
+              Window start date
+            </label>
+            <input
+              id="window-start-slider"
+              type="range"
+              min="0"
+              max="0"
+              value="0"
+              step="1"
+              disabled
+            />
+            <div class="window-slider-ends">
+              <span id="window-floor-label">Set release</span>
+              <span>Today</span>
+            </div>
+          </div>
+          <button id="rerank-button" type="button" disabled>Re-rank</button>
+        </section>
+
         <section
           id="sideboard-picks"
           class="sideboard-picks hidden"
@@ -147,6 +176,6 @@
       </tr>
     </template>
 
-    <script src="app.js?v=15" defer></script>
+    <script src="app.js?v=16" defer></script>
   </body>
 </html>

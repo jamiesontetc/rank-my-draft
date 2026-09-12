@@ -20,6 +20,8 @@ const BASIC_LAND_COLORS = {
 
 let filtersPromise;
 let cubeSourcesPromise;
+let lastRankSession = null;
+let rankInProgress = false;
 
 const COLOR_NAMES = {
   W: "White",
@@ -75,20 +77,10 @@ const KNOWN_CUBE_EXPANSIONS = [
 
 const CUBE_SOURCE_PLACEHOLDER = "Select a cube…";
 const CUBE_HISTORY_START = "2020-01-01";
-
-// Fallback search when the last two weeks have no Premier Draft games.
-// 1) Try a ~12-week window (preferred 14 days + FALLBACK_EXPAND_DAYS).
-// 2) Walk 14-day chunks backward, up to FALLBACK_MAX_CHUNKS (~12 months)
-//    or filters.start_date. Cubes ignore placeholder start_dates.
-// 3) Expand a found older chunk by FALLBACK_EXPAND_DAYS; keep the found
-//    chunk's color ratings if the wider query has no games.
-// 4) Last resort: one wide query from set start (cubes: CUBE_HISTORY_START).
-// See README.
-const FALLBACK_CHUNK_DAYS = 14;
-const FALLBACK_MAX_CHUNKS = 26;
-const FALLBACK_EXPAND_DAYS = 70;
+const INFERENCE_LOOKBACK_DAYS = 14;
 
 const SET_NAMES = {
+  HOB: "The Hobbit",
   SOS: "Secrets of Strixhaven",
   TMT: "Ninja Turtles",
   ECL: "Lorwyn Eclipsed",
@@ -174,6 +166,10 @@ const elements = {
   forceCube: document.querySelector("#force-cube"),
   cubeSourceRow: document.querySelector("#cube-source-row"),
   cubeSource: document.querySelector("#cube-source"),
+  windowStartSlider: document.querySelector("#window-start-slider"),
+  windowRangeLabel: document.querySelector("#window-range-label"),
+  windowFloorLabel: document.querySelector("#window-floor-label"),
+  rerankButton: document.querySelector("#rerank-button"),
 };
 
 function normalizeName(value) {
@@ -188,10 +184,18 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function getDateRange() {
+function todayDateString() {
+  return formatDate(new Date());
+}
+
+function utcDayCount(startDate, endDate) {
+  return Math.round((parseDate(endDate) - parseDate(startDate)) / 86400000);
+}
+
+function getInferenceDateRange() {
   const end = new Date();
   const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - FALLBACK_CHUNK_DAYS);
+  start.setUTCDate(start.getUTCDate() - INFERENCE_LOOKBACK_DAYS);
   return {
     startDate: formatDate(start),
     endDate: formatDate(end),
@@ -208,30 +212,11 @@ function addDays(date, days) {
   return result;
 }
 
-function getPreviousDateRange(range) {
-  const end = parseDate(range.startDate);
-  const start = addDays(end, -FALLBACK_CHUNK_DAYS);
-  return {
-    startDate: formatDate(start),
-    endDate: formatDate(end),
-  };
-}
-
 function clampRangeStart(range, floorDate) {
-  if (parseDate(range.startDate) >= floorDate) return range;
+  const floor = typeof floorDate === "string" ? parseDate(floorDate) : floorDate;
+  if (parseDate(range.startDate) >= floor) return range;
   return {
-    startDate: formatDate(floorDate),
-    endDate: range.endDate,
-  };
-}
-
-function rangesEqual(a, b) {
-  return a.startDate === b.startDate && a.endDate === b.endDate;
-}
-
-function expandRangeEarlier(range, days) {
-  return {
-    startDate: formatDate(addDays(parseDate(range.startDate), -days)),
+    startDate: formatDate(floor),
     endDate: range.endDate,
   };
 }
@@ -598,17 +583,16 @@ function hasPremierDraftGames(colorRatings) {
   return (allDecksRow?.games ?? 0) > 0;
 }
 
-function formatColorRatingWinRate(row, { fallbackUsed } = {}) {
+function formatColorRatingWinRate(row) {
   if (!row || !(row.games > 0)) {
     return {
       primary: "Unavailable",
-      note: fallbackUsed ? "(no games in fallback window)" : "",
+      note: "",
     };
   }
-  const gamesNote = `(${formatInteger(row.games)} games)`;
   return {
     primary: formatPercent(row.wins / row.games),
-    note: fallbackUsed ? `${gamesNote} fallback window` : gamesNote,
+    note: `(${formatInteger(row.games)} games)`,
   };
 }
 
@@ -625,6 +609,29 @@ function getSearchFloorDate(filters, setCode) {
   return getSetStartDate(filters, setCode);
 }
 
+function getDefaultRankRange(filters, setCode, endDate = todayDateString()) {
+  const floor = formatDate(getSearchFloorDate(filters, setCode));
+  const startDate = parseDate(floor) > parseDate(endDate) ? endDate : floor;
+  return { startDate, endDate };
+}
+
+function describeDataWindow(range, floorDate, setCode) {
+  if (range.startDate === floorDate) {
+    return isCubeLikeExpansion(setCode)
+      ? "Since cube history start"
+      : "Since set release";
+  }
+  const inclusiveDays = utcDayCount(range.startDate, range.endDate) + 1;
+  if (inclusiveDays <= 1) return "Today";
+  return `Last ${inclusiveDays} days`;
+}
+
+function emptyWindowError(setCode, range) {
+  return new Error(
+    `No Premier Draft games for ${setCode} from ${range.startDate} to ${range.endDate}. Try a wider date range.`
+  );
+}
+
 async function fetchColorRatingsForRange(setCode, range) {
   return fetchColorRatings({
     setCode,
@@ -633,108 +640,12 @@ async function fetchColorRatingsForRange(setCode, range) {
   });
 }
 
-async function expandFoundFallback(setCode, foundRange, foundRatings, walkFloor) {
-  const expandedRange = clampRangeStart(
-    expandRangeEarlier(foundRange, FALLBACK_EXPAND_DAYS),
-    walkFloor
-  );
-  if (rangesEqual(expandedRange, foundRange)) {
-    return { range: foundRange, colorRatings: foundRatings, fallbackUsed: true };
+async function fetchPremierDraftWindow(setCode, range) {
+  const colorRatings = await fetchColorRatingsForRange(setCode, range);
+  if (!hasPremierDraftGames(colorRatings)) {
+    throw emptyWindowError(setCode, range);
   }
-
-  const expandedRatings = await fetchColorRatingsForRange(setCode, expandedRange);
-  if (hasPremierDraftGames(expandedRatings)) {
-    return { range: expandedRange, colorRatings: expandedRatings, fallbackUsed: true };
-  }
-
-  // Keep the intermediate window that already had games so pair / all-decks
-  // win rates stay visible instead of going blank after a wider query.
-  return { range: foundRange, colorRatings: foundRatings, fallbackUsed: true };
-}
-
-async function findMostRecentAvailableRange(
-  setCode,
-  preferredRange,
-  onProgress,
-  options = {}
-) {
-  const filters = await fetchFilters();
-  const walkFloor = getSearchFloorDate(filters, setCode);
-  const cubeLike = isCubeLikeExpansion(setCode);
-  const maxChunks = options.maxChunks ?? FALLBACK_MAX_CHUNKS;
-  const deepSearch = options.deepSearch !== false;
-  let searchRange = preferredRange;
-  let checkedWindows = 0;
-  let lastEmptyRatings = [];
-
-  const colorRatings = await fetchColorRatingsForRange(setCode, searchRange);
-  checkedWindows += 1;
-
-  if (hasPremierDraftGames(colorRatings)) {
-    return { range: searchRange, colorRatings, fallbackUsed: false };
-  }
-  lastEmptyRatings = colorRatings;
-
-  // Wider net before walking: last ~12 weeks ending on the preferred end date.
-  onProgress?.(`Searching older Premier Draft data near ${preferredRange.endDate}...`);
-  const nearTermRange = clampRangeStart(
-    expandRangeEarlier(preferredRange, FALLBACK_EXPAND_DAYS),
-    walkFloor
-  );
-  if (!rangesEqual(nearTermRange, preferredRange)) {
-    const nearTermRatings = await fetchColorRatingsForRange(setCode, nearTermRange);
-    checkedWindows += 1;
-    if (hasPremierDraftGames(nearTermRatings)) {
-      return { range: nearTermRange, colorRatings: nearTermRatings, fallbackUsed: true };
-    }
-    lastEmptyRatings = nearTermRatings;
-    searchRange = nearTermRange;
-  }
-
-  if (deepSearch) {
-    for (;;) {
-      const previousChunk = getPreviousDateRange(searchRange);
-      if (parseDate(previousChunk.endDate) <= walkFloor) break;
-      if (checkedWindows >= maxChunks) break;
-
-      searchRange = previousChunk;
-      checkedWindows += 1;
-      if (checkedWindows % 3 === 0) {
-        onProgress?.(
-          `Searching older Premier Draft data near ${searchRange.endDate}...`
-        );
-      }
-
-      const chunkRatings = await fetchColorRatingsForRange(setCode, searchRange);
-      if (hasPremierDraftGames(chunkRatings)) {
-        return expandFoundFallback(setCode, searchRange, chunkRatings, walkFloor);
-      }
-      lastEmptyRatings = chunkRatings;
-    }
-  }
-
-  const wideRange = {
-    startDate: cubeLike ? CUBE_HISTORY_START : formatDate(walkFloor),
-    endDate: preferredRange.endDate,
-  };
-  if (!rangesEqual(wideRange, preferredRange) && !rangesEqual(wideRange, searchRange)) {
-    onProgress?.(
-      cubeLike
-        ? `Searching older Premier Draft data for ${setCode}...`
-        : `Searching Premier Draft data back to ${wideRange.startDate}...`
-    );
-    const wideColorRatings = await fetchColorRatingsForRange(setCode, wideRange);
-    if (hasPremierDraftGames(wideColorRatings)) {
-      return {
-        range: wideRange,
-        colorRatings: wideColorRatings,
-        fallbackUsed: true,
-      };
-    }
-    lastEmptyRatings = wideColorRatings;
-  }
-
-  return { range: preferredRange, colorRatings: lastEmptyRatings, fallbackUsed: false };
+  return colorRatings;
 }
 
 function countMatchedCards(cards, cardData) {
@@ -751,7 +662,7 @@ function countMatchedCards(cards, cardData) {
   return matches;
 }
 
-async function inferSetFromCards(cards, range) {
+async function inferSetFromCards(cards, range = getInferenceDateRange()) {
   const filters = await fetchFilters();
   const expansions = filters.expansions ?? [];
   const uniqueNonBasics = new Set(
@@ -782,8 +693,9 @@ async function inferSetFromCards(cards, range) {
   throw new Error("Could not infer the set. Try pasting an Arena export that includes set codes.");
 }
 
-async function discoverUsableCubeExpansions(preferredRange, onProgress) {
+async function discoverUsableCubeExpansions(onProgress) {
   const filters = await fetchFilters();
+  const endDate = todayDateString();
   const candidates = sortCubeExpansions(
     (filters.expansions ?? []).filter(
       (expansion) =>
@@ -797,23 +709,20 @@ async function discoverUsableCubeExpansions(preferredRange, onProgress) {
   onProgress?.("Checking 17Lands cube sources...");
   const found = await Promise.all(
     candidates.map(async (expansion) => {
-      const result = await findMostRecentAvailableRange(expansion, preferredRange, null, {
-        deepSearch: false,
-      });
-      return hasPremierDraftGames(result.colorRatings) ? expansion : null;
+      const range = getDefaultRankRange(filters, expansion, endDate);
+      const colorRatings = await fetchColorRatingsForRange(expansion, range);
+      return hasPremierDraftGames(colorRatings) ? expansion : null;
     })
   );
 
   return found.filter(Boolean);
 }
 
-async function listUsableCubeExpansions(preferredRange, onProgress) {
-  cubeSourcesPromise ??= discoverUsableCubeExpansions(preferredRange, onProgress).catch(
-    (error) => {
-      cubeSourcesPromise = null;
-      throw error;
-    }
-  );
+async function listUsableCubeExpansions(onProgress) {
+  cubeSourcesPromise ??= discoverUsableCubeExpansions(onProgress).catch((error) => {
+    cubeSourcesPromise = null;
+    throw error;
+  });
   return cubeSourcesPromise;
 }
 
@@ -873,11 +782,20 @@ function renderTable(rows) {
 }
 
 function setLoading(isLoading) {
+  rankInProgress = isLoading;
   elements.rankButton.disabled = isLoading;
   elements.rankButton.textContent = isLoading ? "Ranking..." : "Rank It";
   elements.sampleButton.disabled = isLoading;
   elements.cubeSource.disabled = isLoading;
   elements.forceCube.disabled = isLoading;
+  if (elements.windowStartSlider) {
+    const spanDays = Number(elements.windowStartSlider.max) || 0;
+    elements.windowStartSlider.disabled = isLoading || spanDays === 0;
+  }
+  if (elements.rerankButton) {
+    elements.rerankButton.disabled = isLoading || !lastRankSession;
+    elements.rerankButton.textContent = isLoading ? "Re-ranking..." : "Re-rank";
+  }
 }
 
 function showStatus(message, isError = false) {
@@ -926,6 +844,39 @@ function renderSideboardPicks(picks) {
   elements.sideboardPicks.classList.remove("hidden");
 }
 
+function selectedWindowRange() {
+  if (!lastRankSession) return null;
+  const offset = Number(elements.windowStartSlider.value) || 0;
+  const startDate = formatDate(addDays(parseDate(lastRankSession.floorDate), offset));
+  return clampRangeStart(
+    { startDate, endDate: lastRankSession.endDate },
+    lastRankSession.floorDate
+  );
+}
+
+function updateWindowRangeLabel() {
+  const range = selectedWindowRange();
+  if (!range || !elements.windowRangeLabel) return;
+  elements.windowRangeLabel.textContent = `${range.startDate} to ${range.endDate}`;
+  elements.windowStartSlider.setAttribute(
+    "aria-valuetext",
+    `Start ${range.startDate}, end ${range.endDate}`
+  );
+}
+
+function syncWindowControls({ floorDate, endDate, startDate, setCode }) {
+  const maxDays = Math.max(0, utcDayCount(floorDate, endDate));
+  const value = Math.min(maxDays, Math.max(0, utcDayCount(floorDate, startDate)));
+  elements.windowStartSlider.min = "0";
+  elements.windowStartSlider.max = String(maxDays);
+  elements.windowStartSlider.value = String(value);
+  elements.windowStartSlider.disabled = rankInProgress || maxDays === 0;
+  elements.windowFloorLabel.textContent = isCubeLikeExpansion(setCode)
+    ? "Cube history"
+    : "Set release";
+  updateWindowRangeLabel();
+}
+
 function renderResults({
   setCode,
   colorCode,
@@ -933,7 +884,7 @@ function renderResults({
   allDecksRow,
   range,
   cardStats,
-  fallbackUsed,
+  floorDate,
   sideboardCopies = 0,
   sideboardPicks = null,
 }) {
@@ -944,18 +895,14 @@ function renderResults({
     expansion.name,
     expansion.code ? `(${expansion.code})` : ""
   );
-  const pairWinRate = formatColorRatingWinRate(colorRow, { fallbackUsed });
+  const pairWinRate = formatColorRatingWinRate(colorRow);
   setPrimaryWithNote(elements.pairWinRate, pairWinRate.primary, pairWinRate.note);
-  const formatWinRate = formatColorRatingWinRate(allDecksRow, { fallbackUsed });
+  const formatWinRate = formatColorRatingWinRate(allDecksRow);
   setPrimaryWithNote(elements.formatWinRate, formatWinRate.primary, formatWinRate.note);
   elements.meanGih.textContent = formatPercent(cardStats.mean);
-  elements.dateRange.textContent = fallbackUsed
-    ? `${range.startDate} to ${range.endDate} (most recent available · fallback search)`
-    : `${range.startDate} to ${range.endDate}`;
+  elements.dateRange.textContent = `${range.startDate} to ${range.endDate}`;
   if (elements.dataWindow) {
-    elements.dataWindow.textContent = fallbackUsed
-      ? "Older Premier Draft window (fallback search)"
-      : "Last two weeks";
+    elements.dataWindow.textContent = describeDataWindow(range, floorDate, setCode);
   }
   elements.cardsCounted.textContent = formatInteger(cardStats.countedCopies);
   elements.fallbackCount.textContent = `${formatInteger(cardStats.fallbackCount)} cards`;
@@ -971,6 +918,119 @@ function renderResults({
   elements.results.classList.remove("hidden");
 }
 
+function showRankCompleteStatus({
+  colorRow,
+  cardStats,
+  usedCubeSource,
+  setCode,
+  sideboardCopies,
+}) {
+  const sideboardNote = formatSideboardNote(sideboardCopies);
+  const cubeNote = usedCubeSource ? ` Using 17Lands cube source: ${setCode}.` : "";
+  if (colorRow && colorRow.games > 0 && cardStats.mean === null) {
+    const gihScope = usedCubeSource ? "cube window" : "window";
+    showStatus(
+      `Done.${cubeNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${sideboardNote}`
+    );
+    return;
+  }
+  if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
+    showStatus(
+      `Done.${cubeNote} 17Lands has little or no Premier Draft data for this date range.${sideboardNote}`
+    );
+    return;
+  }
+  showStatus(`Done.${cubeNote}${sideboardNote}`);
+}
+
+async function applyRanking({
+  parsed,
+  setCode,
+  range,
+  usedCubeSource,
+  colorCode: existingColorCode,
+}) {
+  const filters = await fetchFilters();
+  const floorDate = formatDate(getSearchFloorDate(filters, setCode));
+  const clampedRange = clampRangeStart(range, floorDate);
+
+  showStatus(
+    usedCubeSource
+      ? `Fetching Premier Draft data for ${setCode}...`
+      : "Fetching Premier Draft data..."
+  );
+  const colorRatings = await fetchPremierDraftWindow(setCode, clampedRange);
+
+  const allCardData = await fetchCardRatings({
+    setCode,
+    startDate: clampedRange.startDate,
+    endDate: clampedRange.endDate,
+  });
+
+  const allCardDataByName = buildCardDataMap(allCardData);
+  const colorCode =
+    existingColorCode ??
+    inferColorCodeFromLands(parsed.cards) ??
+    inferColorCodeFromCards(parsed.cards, allCardDataByName);
+
+  if (!colorCode) {
+    throw new Error("Could not infer a deck color pair from the export.");
+  }
+
+  const colorCardData = await fetchCardRatings({
+    setCode,
+    startDate: clampedRange.startDate,
+    endDate: clampedRange.endDate,
+    colors: colorCode,
+  });
+
+  const colorRow = findColorRow(colorRatings, colorCode);
+  const allDecksRow = findAllDecksRow(colorRatings);
+  const cardStats = calculateMeanGih(parsed.cards, colorCardData, allCardData);
+  const sideboardPicks = rankSideboardPicks(
+    parsed.sideboardCards,
+    colorCode,
+    colorCardData,
+    allCardData
+  );
+
+  lastRankSession = {
+    parsed,
+    setCode,
+    colorCode,
+    usedCubeSource,
+    floorDate,
+    endDate: clampedRange.endDate,
+  };
+
+  syncWindowControls({
+    floorDate,
+    endDate: clampedRange.endDate,
+    startDate: clampedRange.startDate,
+    setCode,
+  });
+
+  renderResults({
+    setCode,
+    colorCode,
+    colorRow,
+    allDecksRow,
+    range: clampedRange,
+    cardStats,
+    floorDate,
+    sideboardCopies: parsed.sideboardCopies,
+    sideboardPicks,
+  });
+
+  showRankCompleteStatus({
+    colorRow,
+    cardStats,
+    usedCubeSource,
+    setCode,
+    sideboardCopies: parsed.sideboardCopies,
+  });
+}
+
 async function rankExport() {
   const exportText = elements.textarea.value.trim();
   if (!exportText) {
@@ -978,13 +1038,14 @@ async function rankExport() {
     return;
   }
 
+  lastRankSession = null;
   setLoading(true);
   elements.results.classList.add("hidden");
   showStatus("Parsing deck...");
 
   try {
     const parsed = parseArenaExport(exportText);
-    const preferredRange = getDateRange();
+    const filters = await fetchFilters();
     const likelyCube =
       Boolean(elements.forceCube.checked) || isLikelyCubeExport(parsed.cards);
     let setCode = parsed.setCode;
@@ -992,10 +1053,7 @@ async function rankExport() {
 
     showStatus("Fetching 17Lands data...");
     if (likelyCube) {
-      const availableCubes = await listUsableCubeExpansions(
-        preferredRange,
-        showStatus
-      );
+      const availableCubes = await listUsableCubeExpansions(showStatus);
       const selectedCube = selectedCubeExpansion(availableCubes);
       populateCubeDropdown(availableCubes, selectedCube);
       showCubeSourceRow(true);
@@ -1016,85 +1074,37 @@ async function rankExport() {
       showCubeSourceRow(false);
       if (!setCode) {
         showStatus("Inferring set from card names...");
-        const inferredSet = await inferSetFromCards(parsed.cards, preferredRange);
+        const inferredSet = await inferSetFromCards(parsed.cards);
         setCode = inferredSet.setCode;
       }
     }
 
-    showStatus(
-      usedCubeSource
-        ? `Finding Premier Draft data for ${setCode}...`
-        : "Finding the latest Premier Draft data..."
-    );
-    const { range, colorRatings, fallbackUsed } =
-      await findMostRecentAvailableRange(setCode, preferredRange, showStatus);
+    const range = getDefaultRankRange(filters, setCode);
+    await applyRanking({ parsed, setCode, range, usedCubeSource });
+  } catch (error) {
+    showStatus(error.message, true);
+  } finally {
+    setLoading(false);
+  }
+}
 
-    const allCardData = await fetchCardRatings({
-      setCode,
-      startDate: range.startDate,
-      endDate: range.endDate,
-    });
+async function rerankExport() {
+  if (!lastRankSession || rankInProgress) return;
 
-    const allCardDataByName = buildCardDataMap(allCardData);
-    const colorCode =
-      inferColorCodeFromLands(parsed.cards) ??
-      inferColorCodeFromCards(parsed.cards, allCardDataByName);
+  const range = selectedWindowRange();
+  if (!range) return;
 
-    if (!colorCode) {
-      throw new Error("Could not infer a deck color pair from the export.");
-    }
+  setLoading(true);
+  showStatus("Re-ranking with the selected date range...");
 
-    const colorCardData = await fetchCardRatings({
-      setCode,
-      startDate: range.startDate,
-      endDate: range.endDate,
-      colors: colorCode,
-    });
-
-    const colorRow = findColorRow(colorRatings, colorCode);
-    const allDecksRow = findAllDecksRow(colorRatings);
-    const cardStats = calculateMeanGih(
-      parsed.cards,
-      colorCardData,
-      allCardData
-    );
-    const sideboardPicks = rankSideboardPicks(
-      parsed.sideboardCards,
-      colorCode,
-      colorCardData,
-      allCardData
-    );
-
-    renderResults({
-      setCode,
-      colorCode,
-      colorRow,
-      allDecksRow,
+  try {
+    await applyRanking({
+      parsed: lastRankSession.parsed,
+      setCode: lastRankSession.setCode,
       range,
-      cardStats,
-      fallbackUsed,
-      sideboardCopies: parsed.sideboardCopies,
-      sideboardPicks,
+      usedCubeSource: lastRankSession.usedCubeSource,
+      colorCode: lastRankSession.colorCode,
     });
-    const sideboardNote = formatSideboardNote(parsed.sideboardCopies);
-    const cubeNote = usedCubeSource
-      ? ` Using 17Lands cube source: ${setCode}.`
-      : "";
-    const fallbackNote = fallbackUsed
-      ? " Using the most recent available Premier Draft window after a fallback search."
-      : "";
-    if (colorRow && colorRow.games > 0 && cardStats.mean === null) {
-      const gihScope = usedCubeSource ? "cube window" : "window";
-      showStatus(
-        `Done.${cubeNote}${fallbackNote} Color-pair data is available; card games in hand win rate is not published for this ${gihScope}.${sideboardNote}`
-      );
-    } else if (!colorRow || colorRow.games === 0 || cardStats.mean === null) {
-      showStatus(
-        `Done.${cubeNote}${fallbackNote} 17Lands has little or no recent Premier Draft data for this set.${sideboardNote}`
-      );
-    } else {
-      showStatus(`Done.${cubeNote}${fallbackNote}${sideboardNote}`);
-    }
   } catch (error) {
     showStatus(error.message, true);
   } finally {
@@ -1103,6 +1113,8 @@ async function rankExport() {
 }
 
 elements.rankButton.addEventListener("click", rankExport);
+elements.rerankButton.addEventListener("click", rerankExport);
+elements.windowStartSlider.addEventListener("input", updateWindowRangeLabel);
 elements.sampleButton.addEventListener("click", () => {
   elements.textarea.value = SAMPLE_EXPORT;
   elements.forceCube.checked = false;
