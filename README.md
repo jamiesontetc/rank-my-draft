@@ -6,7 +6,8 @@ Paste an Arena export, click **Rank It**, and the app reports:
 
 - the inferred deck color pair
 - the set and set code
-- the 17Lands Premier Draft win rate for that color pair over the past two weeks
+- the 17Lands Premier Draft win rate for that color pair since set release
+  (or since the cube history floor)
 - the mean GIH WR for the non-basic cards in the main deck
 
 Sideboard cards in an Arena export are ignored for the main-deck mean GIH WR,
@@ -40,17 +41,15 @@ automatically. Check **This is a cube** to force cube mode when the paste
 is mixed but does not trip the heuristic. Single-set Premier Draft pastes
 are unchanged.
 
-The app first checks the past two weeks of Premier Draft data. If that window
-has no Premier Draft games, it tries a wider ~12-week window ending on the
-same day, then walks backward in two-week chunks until it finds games. A
-found older chunk is expanded by ten earlier weeks (~12-week sample). The
-walk stops at the expansion’s `start_date` from 17Lands `/data/filters`, or
-after 26 two-week steps (~12 months), whichever comes first. Cube expansions
-ignore placeholder start dates and, if the chunk walk misses, fall back to
-an all-time query from 2020-01-01. Intermediate windows that already had
-games keep their color-pair and all-decks win rates when a wider query does
-not. Fallback results label the date range as most recent available and show
-pair / all-decks win rates for the window actually used.
+The first **Rank It** query uses Premier Draft data from the expansion’s
+`start_date` in 17Lands `/data/filters` through today. Cube expansions ignore
+placeholder start dates and use `2020-01-01` through today instead.
+
+After results appear, a date-range slider moves the window start from that
+floor toward today (end date stays today). **Re-rank** fetches the same
+export, set or cube source, and colors again for the selected range. If the
+chosen window has no Premier Draft games, the app shows a status error
+instead of blank win-rate tiles.
 
 ## Project Layout
 
