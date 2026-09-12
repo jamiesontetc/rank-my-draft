@@ -29,7 +29,7 @@ publish a color-pair GIH value for a card, the app falls back to the all-decks
 GIH WR for that card.
 
 Exports without set codes are supported. In that case, the app infers the set
-from card names using 17Lands card-rating data.
+from card names using 17Lands card data.
 
 Multi-set Arena cube exports (many different `(SET)` codes in the main deck)
 are detected as cubes. Ranking then uses 17Lands cube expansions such as
@@ -43,13 +43,21 @@ are unchanged.
 
 The first **Rank It** query uses Premier Draft data from the expansion’s
 `start_date` in 17Lands `/data/filters` through today. Cube expansions ignore
-placeholder start dates and use `2020-01-01` through today instead.
+placeholder start dates and use `2020-01-01` through today instead. Card GIH
+for that first rank uses 17Lands `time_period=ALL_TIME` (full published
+history), not last-day data.
 
 After results appear, a date-range slider moves the window start from that
 floor toward today (end date stays today). **Re-rank** fetches the same
-export, set or cube source, and colors again for the selected range. If the
-chosen window has no Premier Draft games, the app shows a status error
-instead of blank win-rate tiles.
+export, set or cube source, and colors again for the selected range. Pair and
+All Decks win rates follow the exact slider dates via `/color_ratings/data`.
+Card GIH (mean, table, and Sideboard Considerations) comes from
+`/api/card_data`, which only accepts discrete `time_period` presets (`ALL_TIME`,
+`ALL_EXCEPT_FIRST_WEEK`, `LAST_TWO_WEEKS`, `LAST_WEEK`, `LAST_DAY`). The app
+picks the closest preset to the selected start→today window and labels that
+**Card GIH Window** in Query. If the chosen color-ratings window has no
+Premier Draft games, the app shows a status error instead of blank win-rate
+tiles.
 
 ## Project Layout
 
@@ -84,8 +92,8 @@ the same code works locally and on Vercel.
 
 The app queries public 17Lands endpoints directly:
 
-- `/color_ratings/data`
-- `/card_ratings/data`
+- `/color_ratings/data` (pair / all-decks win rates; custom `start_date` / `end_date`)
+- `/api/card_data` (card GIH; `event_type` + `time_period`, optional `colors`)
 - `/data/filters`
 
 Please keep the visible 17Lands attribution in place if you publish or modify
