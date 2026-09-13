@@ -4,7 +4,8 @@
   "private": true,
   "description": "Rank MTG Arena draft deck exports with 17Lands data.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test/parse-arena-export.test.js"
   },
   "engines": {
     "node": ">=18"

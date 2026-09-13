@@ -37,8 +37,11 @@ Multi-set Arena exports (different `(SET)` codes in the main deck) open a
 to rank against that cube. Or choose **Not a Cube** for a 2–3 set draft or
 sealed that is not a cube: each non-basic card is ranked with Premier Draft
 GIH from **that card’s own set** (`/api/card_data`, `event_type=PremierDraft`,
-same `time_period` snapping as a single-set rank). Mean GIH, the card table,
-and Sideboard Considerations use those per-set values. Pair win rate and All
+same `time_period` snapping as a single-set rank). Not a Cube mean GIH and
+the main card table are **Deck-only** (non-basic main-deck cards) and use
+those per-set values. Sideboard copies never enter that mean or table; they
+only feed Sideboard Considerations, same as single-set and cube ranking.
+Pair win rate and All
 Decks WR are **N/A** because there is no single expansion for color ratings.
 Deck colors are still inferred from lands and card colors so on-color vs
 off-color sideboard picks and color-pair vs all-decks GIH still work within
