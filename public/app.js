@@ -228,20 +228,41 @@ function formatInteger(value) {
   return value.toLocaleString();
 }
 
+function normalizeArenaLine(line) {
+  return String(line)
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u202F\u2007]/g, " ");
+}
+
+function isArenaSectionHeader(line, sectionName) {
+  const normalized = normalizeArenaLine(line).trim();
+  const pattern = new RegExp(
+    `^(?://\\s*)?${sectionName}\\s*:?\\s*(?:\\(\\s*\\d+\\s*(?:cards?)?\\s*\\))?$`,
+    "i"
+  );
+  return pattern.test(normalized);
+}
+
 function parseArenaExport(text) {
   const cards = [];
   const sideboardCards = [];
   const setCounts = new Map();
   const linePattern = /^\s*(\d+)\s+(.+?)(?:\s+\(([A-Z0-9]{2,8})\)\s+\d+)?\s*$/i;
   let section = "deck";
+  let seenSideboard = false;
 
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*deck:?\s*$/i.test(line)) {
-      section = "deck";
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = normalizeArenaLine(rawLine);
+    if (isArenaSectionHeader(line, "deck")) {
+      // After Sideboard starts, later Deck headers must not pull cards back
+      // into the main-deck mean/table.
+      if (!seenSideboard) section = "deck";
       continue;
     }
-    if (/^\s*sideboard:?\s*$/i.test(line)) {
+    if (isArenaSectionHeader(line, "sideboard")) {
       section = "sideboard";
+      seenSideboard = true;
       continue;
     }
 
@@ -271,6 +292,11 @@ function parseArenaExport(text) {
   const setCode = [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const sideboardCopies = sideboardCards.reduce((sum, card) => sum + card.quantity, 0);
   return { cards, setCode, sideboardCards, sideboardCopies };
+}
+
+// Deck section only. Mean GIH and the main card table never use sideboard copies.
+function getDeckCardsForMean(parsed) {
+  return parsed.cards ?? [];
 }
 
 function isBasicLand(card) {
@@ -1236,8 +1262,13 @@ function showRankCompleteStatus({
 }
 
 async function applyPerSetRanking({ parsed, range, colorCode: existingColorCode }) {
+  // Not a Cube mean GIH + main card table are Deck-only. Never pass a
+  // merged deck+sideboard list into calculateMeanGihFromSetMaps.
+  const deckCards = getDeckCardsForMean(parsed);
+  const sideboardCards = parsed.sideboardCards ?? [];
+
   const filters = await fetchFilters();
-  const setCodes = collectDistinctSetCodes([parsed.cards, parsed.sideboardCards]);
+  const setCodes = collectDistinctSetCodes([deckCards, sideboardCards]);
   if (setCodes.length === 0) {
     throw new Error(
       "Not a Cube needs Arena set codes on each card, like 1 Card Name (SOS) 123."
@@ -1250,7 +1281,7 @@ async function applyPerSetRanking({ parsed, range, colorCode: existingColorCode 
   const setLabel = setCodes.join(", ");
 
   showStatus(`Fetching Premier Draft GIH by card set (${setLabel})...`);
-  const colorFromLands = existingColorCode ?? inferColorCodeFromLands(parsed.cards);
+  const colorFromLands = existingColorCode ?? inferColorCodeFromLands(deckCards);
 
   let allBySet;
   let colorBySet;
@@ -1271,10 +1302,10 @@ async function applyPerSetRanking({ parsed, range, colorCode: existingColorCode 
       timePeriod: cardPeriod.id,
     });
     const mergedAllByName = mergeCardDataMapsForCards(
-      [...parsed.cards, ...parsed.sideboardCards],
+      [...deckCards, ...sideboardCards],
       allBySet
     );
-    colorCode = inferColorCodeFromCards(parsed.cards, mergedAllByName);
+    colorCode = inferColorCodeFromCards(deckCards, mergedAllByName);
     if (!colorCode) {
       throw new Error("Could not infer a deck color pair from the export.");
     }
@@ -1285,9 +1316,9 @@ async function applyPerSetRanking({ parsed, range, colorCode: existingColorCode 
     });
   }
 
-  const cardStats = calculateMeanGihFromSetMaps(parsed.cards, colorBySet, allBySet);
+  const cardStats = calculateMeanGihFromSetMaps(deckCards, colorBySet, allBySet);
   const sideboardPicks = rankSideboardPicksFromSetMaps(
-    parsed.sideboardCards,
+    sideboardCards,
     colorCode,
     colorBySet,
     allBySet
@@ -1367,11 +1398,13 @@ async function applyRanking({
     timePeriod: cardPeriod.id,
   });
 
+  const deckCards = getDeckCardsForMean(parsed);
+  const sideboardCards = parsed.sideboardCards ?? [];
   const allCardDataByName = buildCardDataMap(allCardData);
   const colorCode =
     existingColorCode ??
-    inferColorCodeFromLands(parsed.cards) ??
-    inferColorCodeFromCards(parsed.cards, allCardDataByName);
+    inferColorCodeFromLands(deckCards) ??
+    inferColorCodeFromCards(deckCards, allCardDataByName);
 
   if (!colorCode) {
     throw new Error("Could not infer a deck color pair from the export.");
@@ -1385,9 +1418,9 @@ async function applyRanking({
 
   const colorRow = findColorRow(colorRatings, colorCode);
   const allDecksRow = findAllDecksRow(colorRatings);
-  const cardStats = calculateMeanGih(parsed.cards, colorCardData, allCardData);
+  const cardStats = calculateMeanGih(deckCards, colorCardData, allCardData);
   const sideboardPicks = rankSideboardPicks(
-    parsed.sideboardCards,
+    sideboardCards,
     colorCode,
     colorCardData,
     allCardData
