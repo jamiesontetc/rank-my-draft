@@ -698,7 +698,7 @@ function calculateMeanGih(cards, colorCardData, allCardData, options = {}) {
   }
 
   return {
-    rows,
+    rows: sortGihRows(rows),
     mean: countedCopies > 0 ? weightedTotal / countedCopies : null,
     countedCopies,
     fallbackCount: rows.filter((row) => isAllDecksSource(row.source)).length,
@@ -721,15 +721,27 @@ function calculateMeanGihFromSetMaps(cards, colorBySet, allBySet) {
   }
 
   return {
-    rows,
+    rows: sortGihRows(rows),
     mean: countedCopies > 0 ? weightedTotal / countedCopies : null,
     countedCopies,
     fallbackCount: rows.filter((row) => isAllDecksSource(row.source)).length,
   };
 }
 
+function hasPublishedGih(row) {
+  return typeof row?.gihWr === "number" && !Number.isNaN(row.gihWr);
+}
+
 function compareGihRows(a, b) {
-  return b.gihWr - a.gihWr || a.name.localeCompare(b.name);
+  const aHas = hasPublishedGih(a);
+  const bHas = hasPublishedGih(b);
+  if (aHas !== bHas) return aHas ? -1 : 1;
+  if (aHas && a.gihWr !== b.gihWr) return b.gihWr - a.gihWr;
+  return String(a.name ?? "").localeCompare(String(b.name ?? ""), "en");
+}
+
+function sortGihRows(rows) {
+  return [...rows].sort(compareGihRows);
 }
 
 function rankSideboardPicks(sideboardCards, colorCode, colorCardData, allCardData, options = {}) {
@@ -1012,12 +1024,13 @@ function clearTable() {
 
 function renderTable(rows) {
   clearTable();
-  if (rows.length === 0) {
+  const sortedRows = sortGihRows(rows);
+  if (sortedRows.length === 0) {
     elements.cardTable.append(elements.emptyRowTemplate.content.cloneNode(true));
     return;
   }
 
-  for (const row of rows) {
+  for (const row of sortedRows) {
     const tr = document.createElement("tr");
     const cells = [
       row.quantity,
